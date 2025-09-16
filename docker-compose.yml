@@ -39,17 +39,17 @@ services:
     #   - "8000:8000"   # i.d.R. nicht nötig; Streamlit spricht intern mit backend:8000
 
   web:
-  build:
-    context: ./streamlit
-  container_name: sehbmaster-web
-  restart: unless-stopped
-  env_file: .env
-  environment:
-    - API_BASE=${API_BASE:-http://backend:8000/api}
-  depends_on:
-    - backend
-  ports:
-    - "80:8501"
+    build:
+      context: ./streamlit
+    container_name: sehbmaster-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - API_BASE=${API_BASE:-http://backend:8000/api}
+    depends_on:
+      - backend
+    ports:
+      - "80:8501"
 
 volumes:
   db_data:
