@@ -19,8 +19,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    # Optional offen lassen, wenn du pgAdmin extern nutzen willst
     ports:
-      - "5432:5432" # optional, nur wenn du lokal zugreifen willst
+      - "5432:5432"
 
   backend:
     build:
@@ -31,13 +32,24 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - INGEST_API_KEY=${INGEST_API_KEY}
-      - CORS_ORIGINS=${CORS_ORIGINS}  
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "8000:8000"  # FastAPI
+    # API bleibt intern im Compose-Netz erreichbar (nginx proxyt darauf)
+    # Wenn du weiterhin direkt testen willst, kommentiere die nächste Zeile ein:
+    # ports:
+    #   - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+
+  web:
+    build:
+      context: ./frontend
+    container_name: sehbmaster-web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
 
 volumes:
   db_data:
