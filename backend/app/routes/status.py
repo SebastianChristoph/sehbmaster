@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy import select
+from sqlalchemy import select, update
 from ..db import get_session
 from ..models import Status
-from ..schemas import StatusIn, StatusOut
+from ..schemas import StatusIn, StatusOut, StatusPatch
 import os
 
 router = APIRouter(prefix="/api/status", tags=["status"])
@@ -27,11 +27,41 @@ def upsert_status(payload: StatusIn, _ok=Depends(require_api_key)):
         stmt = pg_insert(Status.__table__).values(
             raspberry=payload.raspberry,
             status=payload.status,
-            message=payload.message,   # <— NEU
+            message=payload.message,
         ).on_conflict_do_update(
             index_elements=[Status.__table__.c.raspberry],
-            set_={"status": payload.status, "message": payload.message},  # <— NEU
+            set_={"status": payload.status, "message": payload.message},
         )
         session.execute(stmt)
         session.commit()
         return StatusOut(**payload.model_dump())
+
+# NEU: Teil-Update anhand "raspberry" (dein Identifier)
+@router.patch("/{raspberry}", response_model=StatusOut)
+def patch_status(raspberry: str, payload: StatusPatch, _ok=Depends(require_api_key)):
+    # Nur gesetzte Felder übernehmen
+    updates = payload.model_dump(exclude_unset=True, exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    with get_session() as session:
+        # Gibt es den Datensatz?
+        existing = session.execute(select(Status).where(Status.raspberry == raspberry)).scalar_one_or_none()
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Status not found")
+
+        # Update ausführen
+        session.execute(
+            update(Status)
+            .where(Status.raspberry == raspberry)
+            .values(**updates)
+        )
+        session.commit()
+
+        # Reload für Antwort
+        refreshed = session.execute(select(Status).where(Status.raspberry == raspberry)).scalar_one()
+        return StatusOut(
+            raspberry=refreshed.raspberry,
+            status=refreshed.status,
+            message=refreshed.message,
+        )
