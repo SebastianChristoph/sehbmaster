@@ -19,9 +19,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-    # Optional offen lassen, wenn du pgAdmin extern nutzen willst
     ports:
-      - "5432:5432"
+      - "5432:5432"   # optional, nur wenn du extern drauf willst
 
   backend:
     build:
@@ -35,21 +34,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # API bleibt intern im Compose-Netz erreichbar (nginx proxyt darauf)
-    # Wenn du weiterhin direkt testen willst, kommentiere die nächste Zeile ein:
-    # ports:
-    #   - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+    # ports:
+    #   - "8000:8000"   # i.d.R. nicht nötig; Streamlit spricht intern mit backend:8000
 
   web:
-    build:
-      context: ./frontend
-    container_name: sehbmaster-web
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "80:80"
+  build:
+    context: ./streamlit
+  container_name: sehbmaster-web
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    - API_BASE=${API_BASE:-http://backend:8000/api}
+  depends_on:
+    - backend
+  ports:
+    - "80:8501"
 
 volumes:
   db_data:
