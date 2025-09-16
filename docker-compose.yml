@@ -35,8 +35,8 @@ services:
       db:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
-    # ports:
-    #   - "8000:8000"   # i.d.R. nicht nötig; Streamlit spricht intern mit backend:8000
+    ports:
+      - "8000:8000"   # i.d.R. nicht nötig; Streamlit spricht intern mit backend:8000
 
   web:
     build:
