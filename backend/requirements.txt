@@ -4,3 +4,4 @@ sqlalchemy>=2.0
 psycopg[binary]
 pydantic
 python-dotenv
+alembic
