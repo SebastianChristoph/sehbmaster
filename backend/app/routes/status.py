@@ -19,7 +19,7 @@ def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
 def list_status():
     with get_session() as session:
         rows = session.execute(select(Status)).scalars().all()
-        return [StatusOut(raspberry=r.raspberry, status=r.status) for r in rows]
+        return [StatusOut(raspberry=r.raspberry, status=r.status, message=r.message) for r in rows]
 
 @router.post("", response_model=StatusOut)
 def upsert_status(payload: StatusIn, _ok=Depends(require_api_key)):
@@ -27,9 +27,10 @@ def upsert_status(payload: StatusIn, _ok=Depends(require_api_key)):
         stmt = pg_insert(Status.__table__).values(
             raspberry=payload.raspberry,
             status=payload.status,
+            message=payload.message,   # <— NEU
         ).on_conflict_do_update(
             index_elements=[Status.__table__.c.raspberry],
-            set_={"status": payload.status},
+            set_={"status": payload.status, "message": payload.message},  # <— NEU
         )
         session.execute(stmt)
         session.commit()

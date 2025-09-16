@@ -13,6 +13,7 @@ class Status(Base):
     # raspberry als Primärschlüssel (einfach und eindeutig)
     raspberry: Mapped[str] = mapped_column(String(64), primary_key=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True) 
 
 # Schema: dummy, Tabelle: dummy_table
 class DummyTable(Base):
