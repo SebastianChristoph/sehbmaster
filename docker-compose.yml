@@ -3,34 +3,41 @@ version: "3.9"
 services:
   db:
     image: postgres:16
-    container_name: pg
+    container_name: sehbmaster-db
     restart: unless-stopped
+    env_file: .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     volumes:
-      - db-data:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - db_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
+    ports:
+      - "5432:5432" # optional, nur wenn du lokal zugreifen willst
 
-  api:
+  backend:
     build:
-      context: ./api
-    container_name: api
+      context: ./backend
+    container_name: sehbmaster-backend
     restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - INGEST_API_KEY=${INGEST_API_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS}  
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     ports:
-      - "80:8000"   # -> http://<server-ip>/test-names
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers
+      - "8000:8000"  # FastAPI
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
 
 volumes:
-  db-data:
+  db_data:
