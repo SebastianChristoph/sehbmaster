@@ -1,4 +1,3 @@
-import os
 import pandas as pd
 import streamlit as st
 from api_client import get_status
@@ -10,11 +9,6 @@ st.caption("Alle Einträge aus **status.status**")
 @st.cache_data(ttl=10)
 def load_status():
     return get_status()
-
-col_btn, _ = st.columns([1, 5])
-if col_btn.button("Neu laden"):
-    load_status.clear()
-    st.rerun()
 
 try:
     rows = load_status()
@@ -57,8 +51,13 @@ try:
                 " ": st.column_config.TextColumn(" ", width="small"),  # Icon schmal
             },
         )
-        st.success(f"{len(df)} Einträge geladen.")
     else:
         st.info("Keine Einträge vorhanden.")
 except Exception as e:
     st.error(f"Fehler beim Laden: {e}")
+
+
+col_btn, _ = st.columns([1, 5])
+if col_btn.button("Neu laden"):
+    load_status.clear()
+    st.rerun()
