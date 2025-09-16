@@ -17,12 +17,11 @@ target_metadata = Base.metadata
 def run_migrations_offline():
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        include_schemas=True,
-        version_table_schema="public",
-        compare_type=True,
-        compare_server_default=True,
+    url=url,
+    target_metadata=target_metadata,
+    include_schemas=True,
+    compare_type=True,
+    compare_server_default=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -38,7 +37,6 @@ def run_migrations_online():
             connection=connection,
             target_metadata=target_metadata,
             include_schemas=True,
-            version_table_schema="public",
             compare_type=True,
             compare_server_default=True,
         )
