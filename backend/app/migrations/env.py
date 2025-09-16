@@ -2,11 +2,9 @@ from logging.config import fileConfig
 import os
 from sqlalchemy import engine_from_config, pool
 from alembic import context
-from app.models import Base  # <- dein SQLAlchemy Base
+from app.models import Base
 
 config = context.config
-
-# URL aus ENV übernehmen (Compose setzt DATABASE_URL)
 db_url = os.getenv("DATABASE_URL")
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
@@ -21,8 +19,8 @@ def run_migrations_offline():
     context.configure(
         url=url,
         target_metadata=target_metadata,
-        include_schemas=True,              # wichtig: mehrere Schemas erfassen
-        version_table_schema="public",     # alembic_version in public (kannst du ändern)
+        include_schemas=True,
+        version_table_schema="public",
         compare_type=True,
         compare_server_default=True,
     )
