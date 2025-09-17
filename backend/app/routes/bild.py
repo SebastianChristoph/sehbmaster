@@ -1,18 +1,19 @@
 # backend/app/routes/bild.py
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select, delete
+from sqlalchemy import func, select, delete, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ..db import get_session
-from ..models import BildWatch, BildWatchMetrics
+from ..models import BildWatch, BildWatchMetrics, BildLog
 from ..schemas import (
     BildWatchIn, BildWatchOut,
-    BildWatchMetricsIn, BildWatchMetricsOut,
+    BildWatchMetricsIn, BildWatchMetricsOut, BildLogIn, BildLogOut,
 )
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from zoneinfo import ZoneInfo
+
 
 router = APIRouter(prefix="/api/bild", tags=["bild"])
 
@@ -183,3 +184,41 @@ def get_metrics(
             )
             for r in rows
         ]
+    
+# ---------- LOGS ----------
+
+@router.post("/logs", response_model=BildLogOut, status_code=201)
+def add_log(payload: BildLogIn, _=Depends(require_api_key)):
+    """
+    Fügt einen Log-Eintrag hinzu. Wenn kein timestamp mitgegeben wird,
+    wird der aktuelle Zeitpunkt (UTC) gesetzt.
+    """
+    ts = payload.timestamp or datetime.now(timezone.utc)
+    with get_session() as s:
+        obj = BildLog(timestamp=ts, message=payload.message)
+        s.add(obj)
+        s.commit()
+        s.refresh(obj)
+        return BildLogOut(id=obj.id, timestamp=obj.timestamp, message=obj.message)
+
+@router.get("/logs", response_model=list[BildLogOut])
+def list_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
+    """
+    Listet Logs, standardmäßig neueste zuerst (desc).
+    """
+    with get_session() as s:
+        q = select(BildLog)
+        q = q.order_by(BildLog.timestamp.asc() if asc else BildLog.timestamp.desc())
+        q = q.limit(limit).offset(offset)
+        rows = s.execute(q).scalars().all()
+        return [BildLogOut(id=r.id, timestamp=r.timestamp, message=r.message) for r in rows]
+
+@router.delete("/logs", status_code=204)
+def delete_all_logs(_=Depends(require_api_key)):
+    """
+    Löscht alle Logs aus bild.log (TRUNCATE).
+    """
+    with get_session() as s:
+        s.execute(text('TRUNCATE TABLE "bild"."log";'))
+        s.commit()
+    return

@@ -47,3 +47,12 @@ class BildWatchMetricsIn(BaseModel):
 class BildWatchMetricsOut(BildWatchMetricsIn):
     id: int
     created_at: datetime
+
+class BildLogIn(BaseModel):
+    message: str = Field(..., min_length=1)
+    timestamp: datetime | None = None  # optional; wenn leer -> now()
+
+class BildLogOut(BaseModel):
+    id: int
+    timestamp: datetime
+    message: str
