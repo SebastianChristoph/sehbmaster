@@ -6,6 +6,7 @@ from .db import ensure_schemas, engine
 from .models import Base
 from .routes import status as status_routes
 from .routes import dummy as dummy_routes
+from .routes import bild as bild_routes
 
 app = FastAPI(title="sehbmaster backend", version="0.1.0")
 
@@ -26,6 +27,7 @@ def on_startup():
 
 app.include_router(status_routes.router)
 app.include_router(dummy_routes.router)
+app.include_router(bild_routes.router)
 
 @app.get("/healthz")
 def health():
