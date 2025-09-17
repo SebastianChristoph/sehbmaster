@@ -42,11 +42,6 @@ def patch_status(raspberry: str, *, status: str | None = None, message: str | No
         payload["message"] = message
     return _json_or_raise(requests.patch(f"{API_BASE}/status/{raspberry}", json=payload, headers=headers, timeout=10))
 
-def get_dummy():
-    return _json_or_raise(requests.get(f"{API_BASE}/dummy", timeout=10))
-
-def create_dummy(message: str):
-    return _json_or_raise(requests.post(f"{API_BASE}/dummy", json={"message": message}, timeout=10))
 
 # BILDWATCH
 def get_bild_articles(limit: int = 500, offset: int = 0):
@@ -77,3 +72,11 @@ def get_bild_category_counts():
             msg = r.text
         raise ApiError(f"Fehler beim Abrufen der Kategorien: {msg}")
     return r.json()
+
+def get_bild_metrics(time_from: str | None = None, time_to: str | None = None, limit: int = 5000):
+    params = {}
+    if time_from: params["time_from"] = time_from
+    if time_to:   params["time_to"]   = time_to
+    params["limit"] = limit
+    r = requests.get(f"{API_BASE}/bild/metrics", params=params, timeout=10)
+    return _json_or_raise(r)

@@ -35,3 +35,15 @@ class BildWatchIn(BaseModel):
 
 class BildWatchOut(BildWatchIn):
     pass
+
+class BildWatchMetricsIn(BaseModel):
+    ts_hour: datetime  # ISO 8601 (UTC empfohlen)
+    snapshot_total: int
+    snapshot_premium: int
+    snapshot_premium_pct: float
+    new_count: int = 0
+    new_premium_count: int = 0
+
+class BildWatchMetricsOut(BildWatchMetricsIn):
+    id: int
+    created_at: datetime

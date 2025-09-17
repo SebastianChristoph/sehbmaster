@@ -2,16 +2,24 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ..db import get_session
-from ..models import BildWatch
-from ..schemas import BildWatchIn, BildWatchOut  # s.u. falls du die noch nicht hast
+from ..models import BildWatch, BildWatchMetrics
+from ..schemas import (
+    BildWatchIn, BildWatchOut,
+    BildWatchMetricsIn, BildWatchMetricsOut,
+)
 from pydantic import BaseModel
 from datetime import datetime
 import os
+from zoneinfo import ZoneInfo
 
 router = APIRouter(prefix="/api/bild", tags=["bild"])
 
 API_KEY = os.getenv("INGEST_API_KEY", "dev-secret")
+
+
+TZ = ZoneInfo("Europe/Berlin")
 
 def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     if x_api_key != API_KEY:
@@ -107,3 +115,71 @@ def get_category_counts():
             label = cat if cat is not None else "Unbekannt"
             result[label] = count
         return JSONResponse(result)
+
+
+@router.post("/metrics", response_model=BildWatchMetricsOut, status_code=201)
+def upsert_metrics(payload: BildWatchMetricsIn, _=Depends(require_api_key)):
+    """
+    Upsert pro Stunde:
+    - Snapshot-Felder werden *überschrieben*
+    - new_count / new_premium_count werden *aufaddiert*
+    """
+    table = BildWatchMetrics.__table__
+    with get_session() as s:
+        stmt = (
+            pg_insert(table)
+            .values(
+                ts_hour=payload.ts_hour,
+                snapshot_total=payload.snapshot_total,
+                snapshot_premium=payload.snapshot_premium,
+                snapshot_premium_pct=payload.snapshot_premium_pct,
+                new_count=payload.new_count,
+                new_premium_count=payload.new_premium_count,
+            )
+            .on_conflict_do_update(
+                index_elements=[table.c.ts_hour],
+                set_={
+                    "snapshot_total": payload.snapshot_total,
+                    "snapshot_premium": payload.snapshot_premium,
+                    "snapshot_premium_pct": payload.snapshot_premium_pct,
+                    "new_count": table.c.new_count + payload.new_count,
+                    "new_premium_count": table.c.new_premium_count + payload.new_premium_count,
+                },
+            )
+            .returning(*table.c)  # wir wollen die Zeile zurück
+        )
+        row = s.execute(stmt).mappings().first()
+        s.commit()
+        return BildWatchMetricsOut(**row)  # type: ignore[arg-type]
+
+@router.get("/metrics", response_model=list[BildWatchMetricsOut])
+def get_metrics(
+    time_from: datetime | None = None,
+    time_to: datetime | None = None,
+    limit: int = 1000,
+):
+    """
+    Liefert Metriken, optional gefiltert nach Zeitfenster.
+    Standard: letzte 1000 Buckets.
+    """
+    with get_session() as s:
+        q = select(BildWatchMetrics).order_by(BildWatchMetrics.ts_hour.asc())
+        if time_from:
+            q = q.where(BildWatchMetrics.ts_hour >= time_from)
+        if time_to:
+            q = q.where(BildWatchMetrics.ts_hour < time_to)
+        q = q.limit(limit)
+        rows = s.execute(q).scalars().all()
+        return [
+            BildWatchMetricsOut(
+                id=r.id,
+                ts_hour=r.ts_hour,
+                snapshot_total=r.snapshot_total,
+                snapshot_premium=r.snapshot_premium,
+                snapshot_premium_pct=r.snapshot_premium_pct,
+                new_count=r.new_count,
+                new_premium_count=r.new_premium_count,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
