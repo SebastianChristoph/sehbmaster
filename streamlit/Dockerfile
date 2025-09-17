@@ -16,4 +16,4 @@ ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
 EXPOSE 8501
-CMD ["streamlit", "run", "Home.py"]
+CMD ["streamlit", "run", "00_Home.py"]
