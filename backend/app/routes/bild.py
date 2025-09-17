@@ -54,10 +54,11 @@ def add_article(payload: BildWatchIn, _=Depends(require_api_key)):
 
 # -------- PATCH: Article per ID teilweise aktualisieren --------
 class BildWatchPatch(BaseModel):
+    is_premium: bool | None = None           # <— NEU
     converted: bool | None = None
     converted_time: datetime | None = None
     converted_duration_hours: float | None = None
-
+    
 @router.patch("/articles/{article_id}", response_model=BildWatchOut)
 def update_article(article_id: str, patch: BildWatchPatch, _=Depends(require_api_key)):
     updates = patch.model_dump(exclude_unset=True)

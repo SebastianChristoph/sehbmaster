@@ -47,3 +47,8 @@ def get_dummy():
 
 def create_dummy(message: str):
     return _json_or_raise(requests.post(f"{API_BASE}/dummy", json={"message": message}, timeout=10))
+
+# BILDWATCH
+def get_bild_articles(limit: int = 500, offset: int = 0):
+    r = requests.get(f"{API_BASE}/bild/articles", params={"limit": limit, "offset": offset}, timeout=10)
+    return _json_or_raise(r)
