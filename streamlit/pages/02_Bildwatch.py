@@ -122,8 +122,7 @@ except Exception as e:
     st.error(f"Fehler beim Laden der Metriken: {e}")
 
 # -----------------------------
-# d) NEU: Umstellungen Premium→frei pro Tag (lokale Zeit)
-#     Wir werten dafür die Articles über converted_time aus.
+# d) Umstellungen Premium→frei pro Tag (Europe/Berlin)
 # -----------------------------
 st.subheader("Premium → frei pro Tag (Europe/Berlin)")
 try:
@@ -134,12 +133,14 @@ try:
         # nur Einträge mit gesetzter converted_time
         dfa = dfa[dfa["converted_time"].notna()].copy()
         if not dfa.empty:
-            dfa["converted_time"] = pd.to_datetime(dfa["converted_time"], utc=True, errors="coerce").dt.tz_convert(TZ)
-            dfa["day"] = dfa["converted_time"].dt.date  # lokales Datum
+            # UTC -> Europe/Berlin und dann Tages-STRING bauen (saubere Kategorie-Achse)
+            local_ct = pd.to_datetime(dfa["converted_time"], utc=True, errors="coerce").dt.tz_convert(TZ)
+            dfa["day"] = local_ct.dt.strftime("%Y-%m-%d")   # z.B. "2025-09-17"
 
             conv_daily = (
                 dfa.groupby("day", as_index=False)
-                   .agg(count=("id", "count"))
+                   .size()
+                   .rename(columns={"size": "count"})
                    .sort_values("day")
             )
 
@@ -148,6 +149,8 @@ try:
                 title="Umstellungen Premium→frei pro Tag",
                 labels={"day": "Tag", "count": "Anzahl Umstellungen"},
             )
+            # explizit Kategorie-Achse -> genau ein Balken je Tag
+            fig_conv.update_xaxes(type="category")
             st.plotly_chart(fig_conv, use_container_width=True)
         else:
             st.info("Es liegen noch keine Umstellungen (converted_time) vor.")
@@ -155,6 +158,7 @@ try:
         st.info("Keine Artikel mit converted_time gefunden.")
 except Exception as e:
     st.error(f"Fehler beim Auswerten der Umstellungen: {e}")
+
 
 # -----------------------------
 # Tabelle der Artikel
