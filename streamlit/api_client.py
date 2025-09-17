@@ -66,3 +66,14 @@ def delete_bild_articles():
         except Exception:
             msg = resp.text
         raise ApiError(f"Fehler beim Löschen: {msg}")
+
+def get_bild_category_counts():
+    api_base = os.getenv("API_BASE", "http://backend:8000/api").rstrip("/")
+    r = requests.get(f"{api_base}/bild/articles/category_counts", timeout=10)
+    if r.status_code != 200:
+        try:
+            msg = r.json()
+        except Exception:
+            msg = r.text
+        raise ApiError(f"Fehler beim Abrufen der Kategorien: {msg}")
+    return r.json()

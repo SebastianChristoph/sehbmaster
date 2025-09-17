@@ -1,6 +1,7 @@
 # backend/app/routes/bild.py
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from sqlalchemy import select, delete
+from fastapi.responses import JSONResponse
+from sqlalchemy import func, select, delete
 from ..db import get_session
 from ..models import BildWatch
 from ..schemas import BildWatchIn, BildWatchOut  # s.u. falls du die noch nicht hast
@@ -90,3 +91,19 @@ def delete_all_articles():
         s.execute(delete(BildWatch))
         s.commit()
     return
+
+# -------- GET: Kategorien-Counts für Kreisdiagramm --------
+@router.get("/articles/category_counts", response_model=dict)
+def get_category_counts():
+    with get_session() as s:
+        q = (
+            s.query(BildWatch.category, func.count(BildWatch.id))
+            .group_by(BildWatch.category)
+            .all()
+        )
+        # category kann None sein, das ggf. als "Unbekannt" labeln
+        result = {}
+        for cat, count in q:
+            label = cat if cat is not None else "Unbekannt"
+            result[label] = count
+        return JSONResponse(result)

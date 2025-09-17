@@ -1,10 +1,31 @@
 import pandas as pd
 import streamlit as st
-from api_client import get_bild_articles, delete_bild_articles
+from api_client import get_bild_articles, delete_bild_articles, get_bild_category_counts
+import plotly.express as px
 
 st.set_page_config(page_title="sehbmaster – Bildwatch", page_icon="📰", layout="wide")
 st.title("📰 Bildwatch")
 st.caption("Alle Einträge aus **bild.bildwatch** (nur lesen)")
+
+# --- Kreisdiagramm ---
+@st.cache_data(ttl=10)
+def load_category_counts():
+    return get_bild_category_counts()
+
+try:
+    cat_counts = load_category_counts()
+    if cat_counts:
+        labels = list(cat_counts.keys())
+        values = list(cat_counts.values())
+        fig = px.pie(
+            names=labels,
+            values=values,
+            title="Verteilung der Kategorien",
+            hole=0.3,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+except Exception as e:
+    st.error(f"Fehler beim Laden der Kategorien: {e}")
 
 # --- Controls ---
 with st.sidebar:
@@ -19,12 +40,14 @@ def load_articles(limit: int, offset: int):
 col_btn, col_del = st.columns([1, 1])
 if col_btn.button("Neu laden"):
     load_articles.clear()
+    load_category_counts.clear()
     st.rerun()
 with col_del:
     if st.button("Alle Bildwatch-Einträge löschen", type="primary", use_container_width=True, help="Löscht alle Einträge unwiderruflich!", key="delete_bildwatch",):
         try:
             delete_bild_articles()
             load_articles.clear()
+            load_category_counts.clear()
             st.success("Alle Einträge wurden gelöscht.")
             st.rerun()
         except Exception as e:
