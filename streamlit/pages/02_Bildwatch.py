@@ -23,6 +23,11 @@ try:
             title="Verteilung der Kategorien",
             hole=0.3,
         )
+        fig.update_traces(
+            textinfo="percent+label",  # Prozent und Label direkt am Chart
+            textposition="inside",     # Text ins Segment
+            showlegend=False           # Keine Legende
+        )
         st.plotly_chart(fig, use_container_width=True)
 except Exception as e:
     st.error(f"Fehler beim Laden der Kategorien: {e}")
