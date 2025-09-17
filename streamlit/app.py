@@ -3,8 +3,7 @@ import streamlit as st
 from api_client import get_status
 
 st.set_page_config(page_title="Sehbmaster – Home", page_icon="🏠", layout="wide")
-st.title("🏠 Home")
-st.caption("Alle Einträge aus **status.status**")
+st.title("👋 Hallo Sehb")
 
 @st.cache_data(ttl=10)
 def load_status():

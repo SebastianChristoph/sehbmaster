@@ -80,3 +80,19 @@ def get_bild_metrics(time_from: str | None = None, time_to: str | None = None, l
     params["limit"] = limit
     r = requests.get(f"{API_BASE}/bild/metrics", params=params, timeout=10)
     return _json_or_raise(r)
+
+# ---- Logs (bild.log) ----
+def get_bild_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
+    params = {"limit": limit, "offset": offset, "asc": str(asc).lower()}
+    r = requests.get(f"{API_BASE}/bild/logs", params=params, timeout=10)
+    return _json_or_raise(r)
+
+def delete_bild_logs():
+    api_key = os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.delete(f"{API_BASE}/bild/logs", headers={"X-API-Key": api_key}, timeout=10)
+    if r.status_code not in (200, 204):
+        try:
+            msg = r.json()
+        except Exception:
+            msg = r.text
+        raise ApiError(f"Fehler beim Löschen der Logs: {msg}")

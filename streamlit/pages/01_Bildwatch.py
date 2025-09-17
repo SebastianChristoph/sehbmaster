@@ -10,6 +10,8 @@ from api_client import (
     delete_bild_articles,
     get_bild_category_counts,
     get_bild_metrics,
+    get_bild_logs,
+    delete_bild_logs,
 )
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -28,14 +30,14 @@ def load_category_counts():
 @st.cache_data(ttl=15)
 def load_metrics(days: int = 60, limit: int = 20000):
     to_dt = datetime.now(timezone.utc)
-    from_dt = to_dt - timedelta(days=days)
+    from_dt = to_dt - timedelta(days=60)
     return get_bild_metrics(time_from=from_dt.isoformat(), time_to=to_dt.isoformat(), limit=limit)
 
 @st.cache_data(ttl=15)
 def load_articles(limit: int = 20000, offset: int = 0):
     return get_bild_articles(limit=limit, offset=offset)
 
-# Reload-Button
+# Reload-Button (für Artikel/Kategorien/Metriken)
 if st.button("🔄 Neu laden"):
     load_category_counts.clear()
     load_metrics.clear()
@@ -64,26 +66,27 @@ except Exception as e:
     st.error(f"Fehler beim Laden der Kategorien: {e}")
 
 # -----------------------------
-# NEU: Kategorien-Verteilung nur unter Premium-Artikeln
+# Kategorien – nur Premium-Artikel
 # -----------------------------
 st.subheader("Kategorien – nur Premium-Artikel")
 
 try:
-    rows_all = load_articles(limit=20000, offset=0)   # nutzt deinen Cache
+    rows_all = load_articles(limit=20000, offset=0)   # nutzt Cache
     df_all = pd.DataFrame(rows_all)
 
     if not df_all.empty:
-        # nur Premium
         df_prem = df_all[df_all.get("is_premium") == True].copy()
 
         if not df_prem.empty:
+            # Fehlende/leer Strings sauber behandeln
+            df_prem["category"] = df_prem["category"].fillna("unbekannt").replace("", "unbekannt")
+
+            # EINDEUTIGE Spalten: category + count
             counts = (
-                df_prem["category"]
-                .fillna("unbekannt")
-                .replace("", "unbekannt")
-                .value_counts()
-                .reset_index()
-                .rename(columns={"index": "category", "category": "count"})
+                df_prem.groupby("category", dropna=False)
+                       .size()
+                       .reset_index(name="count")
+                       .sort_values("count", ascending=False)
             )
 
             fig_prem_pie = px.pie(
@@ -93,11 +96,7 @@ try:
                 title="Verteilung der Kategorien (nur Premium)",
                 hole=0.3,
             )
-            fig_prem_pie.update_traces(
-                textinfo="percent+label",
-                textposition="inside",
-                showlegend=False,
-            )
+            fig_prem_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
             st.plotly_chart(fig_prem_pie, use_container_width=True)
         else:
             st.info("Aktuell keine Premium-Artikel vorhanden.")
@@ -105,7 +104,8 @@ try:
         st.info("Keine Artikel vorhanden.")
 except Exception as e:
     st.error(f"Fehler beim Erstellen des Premium-Kreisdiagramms: {e}")
-    
+
+
 # -----------------------------
 # b) & c) Stündliche Charts (lokale Zeit)
 # -----------------------------
@@ -114,26 +114,21 @@ try:
     dfm = pd.DataFrame(metrics)
 
     if not dfm.empty:
-        # UTC -> Europe/Berlin
         dfm["ts_hour"] = pd.to_datetime(dfm["ts_hour"], utc=True, errors="coerce")
         dfm["ts_hour_local"] = dfm["ts_hour"].dt.tz_convert(TZ)
         dfm["hour"] = dfm["ts_hour_local"].dt.hour  # 0..23 lokal
 
-        # abgeleitet
         dfm["snapshot_non_premium"] = dfm["snapshot_total"] - dfm["snapshot_premium"]
         dfm["new_non_premium"] = dfm["new_count"] - dfm["new_premium_count"]
 
-        # Ø pro Stunde (über alle Tage)
         snap_avg = (
             dfm.groupby("hour", as_index=False)[["snapshot_premium", "snapshot_non_premium"]]
-              .mean(numeric_only=True)
-              .round(2)
+              .mean(numeric_only=True).round(2)
               .rename(columns={"snapshot_premium": "Premium", "snapshot_non_premium": "Nicht-Premium"})
         )
         new_avg = (
             dfm.groupby("hour", as_index=False)[["new_premium_count", "new_non_premium"]]
-              .mean(numeric_only=True)
-              .round(3)
+              .mean(numeric_only=True).round(3)
               .rename(columns={"new_premium_count": "Premium", "new_non_premium": "Nicht-Premium"})
         )
 
@@ -141,7 +136,6 @@ try:
         new_long  = new_avg.melt(id_vars="hour", var_name="Typ", value_name="Ø Neu")
 
         col1, col2 = st.columns(2)
-
         with col1:
             fig_snap = px.bar(
                 snap_long, x="hour", y="Ø Bestand", color="Typ",
@@ -165,7 +159,7 @@ except Exception as e:
     st.error(f"Fehler beim Laden der Metriken: {e}")
 
 # -----------------------------
-# d) Umstellungen Premium→frei pro Tag (Europe/Berlin)
+# d) Umstellungen Premium→frei pro Tag
 # -----------------------------
 st.subheader("Premium → frei pro Tag (Europe/Berlin)")
 try:
@@ -173,17 +167,14 @@ try:
     dfa = pd.DataFrame(rows_all)
 
     if not dfa.empty and "converted_time" in dfa.columns:
-        # nur Einträge mit gesetzter converted_time
         dfa = dfa[dfa["converted_time"].notna()].copy()
         if not dfa.empty:
-            # UTC -> Europe/Berlin und dann Tages-STRING bauen (saubere Kategorie-Achse)
             local_ct = pd.to_datetime(dfa["converted_time"], utc=True, errors="coerce").dt.tz_convert(TZ)
-            dfa["day"] = local_ct.dt.strftime("%Y-%m-%d")   # z.B. "2025-09-17"
+            dfa["day"] = local_ct.dt.strftime("%Y-%m-%d")   # Kategorische Tages-Achse
 
             conv_daily = (
                 dfa.groupby("day", as_index=False)
-                   .size()
-                   .rename(columns={"size": "count"})
+                   .size().rename(columns={"size": "count"})
                    .sort_values("day")
             )
 
@@ -192,7 +183,6 @@ try:
                 title="Umstellungen Premium→frei pro Tag",
                 labels={"day": "Tag", "count": "Anzahl Umstellungen"},
             )
-            # explizit Kategorie-Achse -> genau ein Balken je Tag
             fig_conv.update_xaxes(type="category")
             st.plotly_chart(fig_conv, use_container_width=True)
         else:
@@ -202,7 +192,6 @@ try:
 except Exception as e:
     st.error(f"Fehler beim Auswerten der Umstellungen: {e}")
 
-
 # -----------------------------
 # Tabelle der Artikel
 # -----------------------------
@@ -211,8 +200,6 @@ try:
     rows = rows_all if 'rows_all' in locals() else load_articles()
     if rows:
         df = pd.DataFrame(rows)
-
-        # Zeitspalten lokal anzeigen
         for col in ("published", "converted_time"):
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], utc=True, errors="coerce").dt.tz_convert(TZ)
@@ -227,9 +214,7 @@ try:
         df = df[cols]
 
         st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
+            df, use_container_width=True, hide_index=True,
             column_config={
                 "url": st.column_config.LinkColumn("URL"),
                 "is_premium": st.column_config.CheckboxColumn("Premium", disabled=True),
@@ -259,3 +244,49 @@ if st.button("🗑️ Alle Bildwatch-Einträge löschen", type="primary"):
         st.rerun()
     except Exception as e:
         st.error(str(e))
+
+# -----------------------------
+# LOGS (Lazy Load)
+# -----------------------------
+st.divider()
+st.subheader("Logs (bild.log)")
+
+if "show_logs" not in st.session_state:
+    st.session_state.show_logs = False
+
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    if st.button("📜 Load logs"):
+        st.session_state.show_logs = True
+        st.rerun()
+with col_b:
+    if st.button("🗑️ Delete all logs"):
+        try:
+            delete_bild_logs()
+            st.session_state.show_logs = False
+            st.success("Alle Logs gelöscht.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Fehler beim Löschen: {e}")
+
+if st.session_state.show_logs:
+    try:
+        logs = get_bild_logs(limit=5000, asc=True)
+        dfl = pd.DataFrame(logs)
+        if not dfl.empty:
+            dfl["timestamp"] = pd.to_datetime(dfl["timestamp"], utc=True, errors="coerce").dt.tz_convert(TZ)
+            dfl = dfl[["timestamp", "message", "id"]] if set(["timestamp","message","id"]).issubset(dfl.columns) else dfl
+            st.dataframe(
+                dfl.sort_values("timestamp"),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "timestamp": st.column_config.DatetimeColumn("Zeit"),
+                    "message": st.column_config.TextColumn("Nachricht") if hasattr(st.column_config, "TextColumn") else None,
+                },
+            )
+            st.caption(f"{len(dfl)} Log-Einträge geladen.")
+        else:
+            st.info("Keine Logs vorhanden.")
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Logs: {e}")
