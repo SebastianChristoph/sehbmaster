@@ -27,4 +27,5 @@ def ensure_schemas():
     with engine.connect() as conn:
         conn.execute(text('CREATE SCHEMA IF NOT EXISTS "status";'))
         conn.execute(text('CREATE SCHEMA IF NOT EXISTS "dummy";'))
+        conn.execute(text('CREATE SCHEMA IF NOT EXISTS "bild";')) 
         conn.commit()
