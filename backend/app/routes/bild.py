@@ -1,6 +1,6 @@
 # backend/app/routes/bild.py
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from ..db import get_session
 from ..models import BildWatch
 from ..schemas import BildWatchIn, BildWatchOut  # s.u. falls du die noch nicht hast
@@ -82,3 +82,11 @@ def update_article(article_id: str, patch: BildWatchPatch, _=Depends(require_api
             published=obj.published, converted_time=obj.converted_time,
             converted_duration_hours=obj.converted_duration_hours,
         )
+
+# -------- DELETE: Alle Articles löschen --------
+@router.delete("/articles", status_code=204, dependencies=[Depends(require_api_key)])
+def delete_all_articles():
+    with get_session() as s:
+        s.execute(delete(BildWatch))
+        s.commit()
+    return

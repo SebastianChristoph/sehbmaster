@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
-from api_client import get_bild_articles
+from api_client import get_bild_articles, delete_bild_articles
+
 st.set_page_config(page_title="sehbmaster – Bildwatch", page_icon="📰", layout="wide")
 st.title("📰 Bildwatch")
 st.caption("Alle Einträge aus **bild.bildwatch** (nur lesen)")
@@ -15,10 +16,19 @@ with st.sidebar:
 def load_articles(limit: int, offset: int):
     return get_bild_articles(limit=limit, offset=offset)
 
-col_btn, _ = st.columns([1, 5])
+col_btn, col_del = st.columns([1, 1])
 if col_btn.button("Neu laden"):
     load_articles.clear()
     st.rerun()
+with col_del:
+    if st.button("Alle Bildwatch-Einträge löschen", type="primary", use_container_width=True, help="Löscht alle Einträge unwiderruflich!", key="delete_bildwatch",):
+        try:
+            delete_bild_articles()
+            load_articles.clear()
+            st.success("Alle Einträge wurden gelöscht.")
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
 
 # --- Tabelle ---
 try:

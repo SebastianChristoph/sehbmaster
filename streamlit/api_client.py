@@ -52,3 +52,17 @@ def create_dummy(message: str):
 def get_bild_articles(limit: int = 500, offset: int = 0):
     r = requests.get(f"{API_BASE}/bild/articles", params={"limit": limit, "offset": offset}, timeout=10)
     return _json_or_raise(r)
+
+def delete_bild_articles():
+    api_key = os.getenv("INGEST_API_KEY", "dev-secret")
+    resp = requests.delete(
+        f"{API_BASE}/bild/articles",
+        headers={"X-API-Key": api_key},
+        timeout=10,
+    )
+    if resp.status_code not in (204, 200):
+        try:
+            msg = resp.json()
+        except Exception:
+            msg = resp.text
+        raise ApiError(f"Fehler beim Löschen: {msg}")
