@@ -1,214 +1,185 @@
-# pages/02_Bildwatch.py
-import pandas as pd
-import streamlit as st
-import plotly.express as px
-from datetime import datetime, timedelta, timezone
+# backend/app/routes/bild.py
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import func, select, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from ..db import get_session
+from ..models import BildWatch, BildWatchMetrics
+from ..schemas import (
+    BildWatchIn, BildWatchOut,
+    BildWatchMetricsIn, BildWatchMetricsOut,
+)
+from pydantic import BaseModel
+from datetime import datetime
+import os
 from zoneinfo import ZoneInfo
 
-from api_client import (
-    get_bild_articles,
-    delete_bild_articles,
-    get_bild_category_counts,
-    get_bild_metrics,
-)
+router = APIRouter(prefix="/api/bild", tags=["bild"])
+
+API_KEY = os.getenv("INGEST_API_KEY", "dev-secret")
+
 
 TZ = ZoneInfo("Europe/Berlin")
 
-st.set_page_config(page_title="sehbmaster – Bildwatch", page_icon="📰", layout="wide")
-st.title("📰 Bildwatch")
-st.caption("Übersicht & Metriken. Zeiten in Europe/Berlin.")
+def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    return True
 
-# -----------------------------
-# Caches / Loader
-# -----------------------------
-@st.cache_data(ttl=15)
-def load_category_counts():
-    return get_bild_category_counts()
-
-@st.cache_data(ttl=15)
-def load_metrics(days: int = 60, limit: int = 20000):
-    to_dt = datetime.now(timezone.utc)
-    from_dt = to_dt - timedelta(days=days)
-    return get_bild_metrics(time_from=from_dt.isoformat(), time_to=to_dt.isoformat(), limit=limit)
-
-@st.cache_data(ttl=15)
-def load_articles(limit: int = 20000, offset: int = 0):
-    return get_bild_articles(limit=limit, offset=offset)
-
-# Reload-Button
-if st.button("🔄 Neu laden"):
-    load_category_counts.clear()
-    load_metrics.clear()
-    load_articles.clear()
-    st.rerun()
-
-# -----------------------------
-# a) Kreisdiagramm Kategorien
-# -----------------------------
-try:
-    cat_counts = load_category_counts()
-    if cat_counts:
-        labels = list(cat_counts.keys())
-        values = list(cat_counts.values())
-        fig_pie = px.pie(
-            names=labels,
-            values=values,
-            title="Verteilung der Kategorien",
-            hole=0.3,
-        )
-        fig_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
-        st.plotly_chart(fig_pie, use_container_width=True)
-    else:
-        st.info("Keine Kategorien-Daten verfügbar.")
-except Exception as e:
-    st.error(f"Fehler beim Laden der Kategorien: {e}")
-
-# -----------------------------
-# b) & c) Stündliche Charts (lokale Zeit)
-# -----------------------------
-try:
-    metrics = load_metrics()
-    dfm = pd.DataFrame(metrics)
-
-    if not dfm.empty:
-        # UTC -> Europe/Berlin
-        dfm["ts_hour"] = pd.to_datetime(dfm["ts_hour"], utc=True, errors="coerce")
-        dfm["ts_hour_local"] = dfm["ts_hour"].dt.tz_convert(TZ)
-        dfm["hour"] = dfm["ts_hour_local"].dt.hour  # 0..23 lokal
-
-        # abgeleitet
-        dfm["snapshot_non_premium"] = dfm["snapshot_total"] - dfm["snapshot_premium"]
-        dfm["new_non_premium"] = dfm["new_count"] - dfm["new_premium_count"]
-
-        # Ø pro Stunde (über alle Tage)
-        snap_avg = (
-            dfm.groupby("hour", as_index=False)[["snapshot_premium", "snapshot_non_premium"]]
-              .mean(numeric_only=True)
-              .round(2)
-              .rename(columns={"snapshot_premium": "Premium", "snapshot_non_premium": "Nicht-Premium"})
-        )
-        new_avg = (
-            dfm.groupby("hour", as_index=False)[["new_premium_count", "new_non_premium"]]
-              .mean(numeric_only=True)
-              .round(3)
-              .rename(columns={"new_premium_count": "Premium", "new_non_premium": "Nicht-Premium"})
-        )
-
-        snap_long = snap_avg.melt(id_vars="hour", var_name="Typ", value_name="Ø Bestand")
-        new_long  = new_avg.melt(id_vars="hour", var_name="Typ", value_name="Ø Neu")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            fig_snap = px.bar(
-                snap_long, x="hour", y="Ø Bestand", color="Typ",
-                title="Ø Artikel gesamt pro Stunde (Europe/Berlin)",
-                barmode="stack", category_orders={"hour": list(range(24))},
+# -------- GET: alle Articles --------
+@router.get("/articles", response_model=list[BildWatchOut])
+def get_all_articles(limit: int = 500, offset: int = 0):
+    with get_session() as s:
+        q = select(BildWatch).order_by(BildWatch.published.desc()) \
+                             .offset(offset).limit(limit)
+        rows = s.execute(q).scalars().all()
+        return [
+            BildWatchOut(
+                id=r.id, title=r.title, url=r.url, category=r.category,
+                is_premium=r.is_premium, converted=r.converted,
+                published=r.published, converted_time=r.converted_time,
+                converted_duration_hours=r.converted_duration_hours,
             )
-            fig_snap.update_layout(xaxis_title="Stunde (0–23)", yaxis_title="Ø Artikel")
-            st.plotly_chart(fig_snap, use_container_width=True)
-
-        with col2:
-            fig_new = px.bar(
-                new_long, x="hour", y="Ø Neu", color="Typ",
-                title="Ø neue Artikel pro Stunde (Europe/Berlin)",
-                barmode="stack", category_orders={"hour": list(range(24))},
-            )
-            fig_new.update_layout(xaxis_title="Stunde (0–23)", yaxis_title="Ø neue Artikel")
-            st.plotly_chart(fig_new, use_container_width=True)
-    else:
-        st.info("Keine Metrik-Daten vorhanden. Läuft der Scraper schon stündlich?")
-except Exception as e:
-    st.error(f"Fehler beim Laden der Metriken: {e}")
-
-# -----------------------------
-# d) NEU: Umstellungen Premium→frei pro Tag (lokale Zeit)
-#     Wir werten dafür die Articles über converted_time aus.
-# -----------------------------
-st.subheader("Premium → frei pro Tag (Europe/Berlin)")
-try:
-    rows_all = load_articles(limit=20000, offset=0)
-    dfa = pd.DataFrame(rows_all)
-
-    if not dfa.empty and "converted_time" in dfa.columns:
-        # nur Einträge mit gesetzter converted_time
-        dfa = dfa[dfa["converted_time"].notna()].copy()
-        if not dfa.empty:
-            dfa["converted_time"] = pd.to_datetime(dfa["converted_time"], utc=True, errors="coerce").dt.tz_convert(TZ)
-            dfa["day"] = dfa["converted_time"].dt.date  # lokales Datum
-
-            conv_daily = (
-                dfa.groupby("day", as_index=False)
-                   .agg(count=("id", "count"))
-                   .sort_values("day")
-            )
-
-            fig_conv = px.bar(
-                conv_daily, x="day", y="count",
-                title="Umstellungen Premium→frei pro Tag",
-                labels={"day": "Tag", "count": "Anzahl Umstellungen"},
-            )
-            st.plotly_chart(fig_conv, use_container_width=True)
-        else:
-            st.info("Es liegen noch keine Umstellungen (converted_time) vor.")
-    else:
-        st.info("Keine Artikel mit converted_time gefunden.")
-except Exception as e:
-    st.error(f"Fehler beim Auswerten der Umstellungen: {e}")
-
-# -----------------------------
-# Tabelle der Artikel
-# -----------------------------
-st.subheader("Alle Artikel (neueste zuerst)")
-try:
-    rows = rows_all if 'rows_all' in locals() else load_articles()
-    if rows:
-        df = pd.DataFrame(rows)
-
-        # Zeitspalten lokal anzeigen
-        for col in ("published", "converted_time"):
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], utc=True, errors="coerce").dt.tz_convert(TZ)
-
-        want = [
-            "id", "title", "category",
-            "is_premium", "converted",
-            "published", "converted_time", "converted_duration_hours",
-            "url",
+            for r in rows
         ]
-        cols = [c for c in want if c in df.columns] + [c for c in df.columns if c not in want]
-        df = df[cols]
 
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "url": st.column_config.LinkColumn("URL"),
-                "is_premium": st.column_config.CheckboxColumn("Premium", disabled=True),
-                "converted": st.column_config.CheckboxColumn("Converted", disabled=True),
-                "converted_duration_hours": st.column_config.NumberColumn("Converted (h)", format="%.3f"),
-                "published": st.column_config.DatetimeColumn("Published"),
-                "converted_time": st.column_config.DatetimeColumn("Converted time"),
-            },
+# -------- POST: neuen Article hinzufügen --------
+@router.post("/articles", response_model=BildWatchOut, status_code=201)
+def add_article(payload: BildWatchIn, _=Depends(require_api_key)):
+    with get_session() as s:
+        exists = s.get(BildWatch, payload.id)
+        if exists:
+            raise HTTPException(status_code=409, detail="Article with this id already exists")
+        obj = BildWatch(**payload.model_dump())
+        s.add(obj)
+        s.commit()
+        s.refresh(obj)
+        return BildWatchOut(
+            id=obj.id, title=obj.title, url=obj.url, category=obj.category,
+            is_premium=obj.is_premium, converted=obj.converted,
+            published=obj.published, converted_time=obj.converted_time,
+            converted_duration_hours=obj.converted_duration_hours,
         )
-        st.caption(f"{len(df)} Einträge geladen.")
-    else:
-        st.info("Keine Artikel vorhanden.")
-except Exception as e:
-    st.error(f"Fehler beim Laden der Artikel: {e}")
 
-# -----------------------------
-# Danger-Zone: Alles löschen
-# -----------------------------
-st.divider()
-if st.button("🗑️ Alle Bildwatch-Einträge löschen", type="primary"):
-    try:
-        delete_bild_articles()
-        load_articles.clear()
-        load_category_counts.clear()
-        load_metrics.clear()
-        st.success("Alle Einträge wurden gelöscht.")
-        st.rerun()
-    except Exception as e:
-        st.error(str(e))
+# -------- PATCH: Article per ID teilweise aktualisieren --------
+class BildWatchPatch(BaseModel):
+    is_premium: bool | None = None           # <— NEU
+    converted: bool | None = None
+    converted_time: datetime | None = None
+    converted_duration_hours: float | None = None
+    
+@router.patch("/articles/{article_id}", response_model=BildWatchOut)
+def update_article(article_id: str, patch: BildWatchPatch, _=Depends(require_api_key)):
+    updates = patch.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    with get_session() as s:
+        obj = s.get(BildWatch, article_id)
+        if not obj:
+            raise HTTPException(status_code=404, detail="Article not found")
+
+        for k, v in updates.items():
+            setattr(obj, k, v)
+
+        s.commit()
+        s.refresh(obj)
+
+        return BildWatchOut(
+            id=obj.id, title=obj.title, url=obj.url, category=obj.category,
+            is_premium=obj.is_premium, converted=obj.converted,
+            published=obj.published, converted_time=obj.converted_time,
+            converted_duration_hours=obj.converted_duration_hours,
+        )
+
+# -------- DELETE: Alle Articles löschen --------
+@router.delete("/articles", status_code=204, dependencies=[Depends(require_api_key)])
+def delete_all_articles():
+    with get_session() as s:
+        s.execute(delete(BildWatch))
+        s.commit()
+    return
+
+# -------- GET: Kategorien-Counts für Kreisdiagramm --------
+@router.get("/articles/category_counts", response_model=dict)
+def get_category_counts():
+    with get_session() as s:
+        q = (
+            s.query(BildWatch.category, func.count(BildWatch.id))
+            .group_by(BildWatch.category)
+            .all()
+        )
+        # category kann None sein, das ggf. als "Unbekannt" labeln
+        result = {}
+        for cat, count in q:
+            label = cat if cat is not None else "Unbekannt"
+            result[label] = count
+        return JSONResponse(result)
+
+
+@router.post("/metrics", response_model=BildWatchMetricsOut, status_code=201)
+def upsert_metrics(payload: BildWatchMetricsIn, _=Depends(require_api_key)):
+    """
+    Upsert pro Stunde:
+    - Snapshot-Felder werden *überschrieben*
+    - new_count / new_premium_count werden *aufaddiert*
+    """
+    table = BildWatchMetrics.__table__
+    with get_session() as s:
+        stmt = (
+            pg_insert(table)
+            .values(
+                ts_hour=payload.ts_hour,
+                snapshot_total=payload.snapshot_total,
+                snapshot_premium=payload.snapshot_premium,
+                snapshot_premium_pct=payload.snapshot_premium_pct,
+                new_count=payload.new_count,
+                new_premium_count=payload.new_premium_count,
+            )
+            .on_conflict_do_update(
+                index_elements=[table.c.ts_hour],
+                set_={
+                    "snapshot_total": payload.snapshot_total,
+                    "snapshot_premium": payload.snapshot_premium,
+                    "snapshot_premium_pct": payload.snapshot_premium_pct,
+                    "new_count": table.c.new_count + payload.new_count,
+                    "new_premium_count": table.c.new_premium_count + payload.new_premium_count,
+                },
+            )
+            .returning(*table.c)  # wir wollen die Zeile zurück
+        )
+        row = s.execute(stmt).mappings().first()
+        s.commit()
+        return BildWatchMetricsOut(**row)  # type: ignore[arg-type]
+
+@router.get("/metrics", response_model=list[BildWatchMetricsOut])
+def get_metrics(
+    time_from: datetime | None = None,
+    time_to: datetime | None = None,
+    limit: int = 1000,
+):
+    """
+    Liefert Metriken, optional gefiltert nach Zeitfenster.
+    Standard: letzte 1000 Buckets.
+    """
+    with get_session() as s:
+        q = select(BildWatchMetrics).order_by(BildWatchMetrics.ts_hour.asc())
+        if time_from:
+            q = q.where(BildWatchMetrics.ts_hour >= time_from)
+        if time_to:
+            q = q.where(BildWatchMetrics.ts_hour < time_to)
+        q = q.limit(limit)
+        rows = s.execute(q).scalars().all()
+        return [
+            BildWatchMetricsOut(
+                id=r.id,
+                ts_hour=r.ts_hour,
+                snapshot_total=r.snapshot_total,
+                snapshot_premium=r.snapshot_premium,
+                snapshot_premium_pct=r.snapshot_premium_pct,
+                new_count=r.new_count,
+                new_premium_count=r.new_premium_count,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
