@@ -64,6 +64,49 @@ except Exception as e:
     st.error(f"Fehler beim Laden der Kategorien: {e}")
 
 # -----------------------------
+# NEU: Kategorien-Verteilung nur unter Premium-Artikeln
+# -----------------------------
+st.subheader("Kategorien – nur Premium-Artikel")
+
+try:
+    rows_all = load_articles(limit=20000, offset=0)   # nutzt deinen Cache
+    df_all = pd.DataFrame(rows_all)
+
+    if not df_all.empty:
+        # nur Premium
+        df_prem = df_all[df_all.get("is_premium") == True].copy()
+
+        if not df_prem.empty:
+            counts = (
+                df_prem["category"]
+                .fillna("unbekannt")
+                .replace("", "unbekannt")
+                .value_counts()
+                .reset_index()
+                .rename(columns={"index": "category", "category": "count"})
+            )
+
+            fig_prem_pie = px.pie(
+                counts,
+                names="category",
+                values="count",
+                title="Verteilung der Kategorien (nur Premium)",
+                hole=0.3,
+            )
+            fig_prem_pie.update_traces(
+                textinfo="percent+label",
+                textposition="inside",
+                showlegend=False,
+            )
+            st.plotly_chart(fig_prem_pie, use_container_width=True)
+        else:
+            st.info("Aktuell keine Premium-Artikel vorhanden.")
+    else:
+        st.info("Keine Artikel vorhanden.")
+except Exception as e:
+    st.error(f"Fehler beim Erstellen des Premium-Kreisdiagramms: {e}")
+    
+# -----------------------------
 # b) & c) Stündliche Charts (lokale Zeit)
 # -----------------------------
 try:

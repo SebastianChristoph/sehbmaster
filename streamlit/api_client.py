@@ -42,11 +42,6 @@ def patch_status(raspberry: str, *, status: str | None = None, message: str | No
         payload["message"] = message
     return _json_or_raise(requests.patch(f"{API_BASE}/status/{raspberry}", json=payload, headers=headers, timeout=10))
 
-def get_dummy():
-    return _json_or_raise(requests.get(f"{API_BASE}/dummy", timeout=10))
-
-def create_dummy(message: str):
-    return _json_or_raise(requests.post(f"{API_BASE}/dummy", json={"message": message}, timeout=10))
 
 # BILDWATCH
 def get_bild_articles(limit: int = 500, offset: int = 0):
