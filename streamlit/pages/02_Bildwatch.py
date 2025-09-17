@@ -47,16 +47,6 @@ if col_btn.button("Neu laden"):
     load_articles.clear()
     load_category_counts.clear()
     st.rerun()
-with col_del:
-    if st.button("Alle Bildwatch-Einträge löschen", type="primary", use_container_width=True, help="Löscht alle Einträge unwiderruflich!", key="delete_bildwatch",):
-        try:
-            delete_bild_articles()
-            load_articles.clear()
-            load_category_counts.clear()
-            st.success("Alle Einträge wurden gelöscht.")
-            st.rerun()
-        except Exception as e:
-            st.error(str(e))
 
 # --- Tabelle ---
 try:
@@ -98,3 +88,13 @@ try:
 except Exception as e:
     st.error(f"Fehler beim Laden: {e}")
 
+with col_del:
+    if st.button("Alle Bildwatch-Einträge löschen", type="primary", use_container_width=True, help="Löscht alle Einträge unwiderruflich!", key="delete_bildwatch",):
+        try:
+            delete_bild_articles()
+            load_articles.clear()
+            load_category_counts.clear()
+            st.success("Alle Einträge wurden gelöscht.")
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
