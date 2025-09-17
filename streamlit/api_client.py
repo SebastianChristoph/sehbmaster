@@ -77,3 +77,11 @@ def get_bild_category_counts():
             msg = r.text
         raise ApiError(f"Fehler beim Abrufen der Kategorien: {msg}")
     return r.json()
+
+def get_bild_metrics(time_from: str | None = None, time_to: str | None = None, limit: int = 5000):
+    params = {}
+    if time_from: params["time_from"] = time_from
+    if time_to:   params["time_to"]   = time_to
+    params["limit"] = limit
+    r = requests.get(f"{API_BASE}/bild/metrics", params=params, timeout=10)
+    return _json_or_raise(r)
