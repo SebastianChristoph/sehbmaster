@@ -93,10 +93,11 @@ def update_article(article_id: str, patch: BildWatchPatch, _=Depends(require_api
             converted_duration_hours=obj.converted_duration_hours,
         )
 
-# -------- DELETE: Alle Articles löschen --------
+# -------- DELETE: Alle Articles und Metrics löschen --------
 @router.delete("/articles", status_code=204, dependencies=[Depends(require_api_key)])
-def delete_all_articles():
+def delete_all_articles_and_metrics():
     with get_session() as s:
+        s.execute(delete(BildWatchMetrics))
         s.execute(delete(BildWatch))
         s.commit()
     return

@@ -234,7 +234,7 @@ except Exception as e:
 # Danger-Zone: Alles löschen
 # -----------------------------
 st.divider()
-if st.button("🗑️ Alle Bildwatch-Einträge löschen", type="primary"):
+if st.button("🗑️ Alle Bildwatch-Einträge und Metriken löschen", type="primary"):
     try:
         delete_bild_articles()
         load_articles.clear()
