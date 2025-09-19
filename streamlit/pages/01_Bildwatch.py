@@ -49,48 +49,52 @@ if st.button("🔄 Neu laden"):
     st.rerun()
 
 # -----------------------------
-# a) Kreisdiagramm Kategorien (alle)
+# a) Kreisdiagramm Kategorien (alle) + nur Premium nebeneinander
 # -----------------------------
-try:
-    cat_counts = load_category_counts(premium_only=False)
-    if cat_counts:
-        labels = list(cat_counts.keys())
-        values = list(cat_counts.values())
-        fig_pie = px.pie(
-            names=labels,
-            values=values,
-            title="Verteilung der Kategorien (alle Artikel)",
-            hole=0.3,
-        )
-        fig_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
-        st.plotly_chart(fig_pie, use_container_width=True)
-    else:
-        st.info("Keine Kategorien-Daten verfügbar.")
-except Exception as e:
-    st.error(f"Fehler beim Laden der Kategorien: {e}")
+st.subheader("Kategorien-Verteilung")
 
-# -----------------------------
-# Kategorien – nur Premium-Artikel (Backend-berechnet)
-# -----------------------------
-st.subheader("Kategorien – nur Premium-Artikel")
-try:
-    cat_counts_prem = load_category_counts(premium_only=True)
-    if cat_counts_prem:
-        labels = list(cat_counts_prem.keys())
-        values = list(cat_counts_prem.values())
-        fig_prem_pie = px.pie(
-            names=labels,
-            values=values,
-            title="Verteilung der Kategorien (nur Premium)",
-            hole=0.3,
-        )
-        fig_prem_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
-        st.plotly_chart(fig_prem_pie, use_container_width=True)
-    else:
-        st.info("Aktuell keine Premium-Artikel vorhanden.")
-except Exception as e:
-    st.error(f"Fehler beim Erstellen des Premium-Kreisdiagramms: {e}")
+col1, col2 = st.columns(2)
 
+# alle Artikel
+with col1:
+    try:
+        cat_counts = load_category_counts(premium_only=False)
+        if cat_counts:
+            labels = list(cat_counts.keys())
+            values = list(cat_counts.values())
+            fig_pie = px.pie(
+                names=labels,
+                values=values,
+                title="Alle Artikel",
+                hole=0.3,
+            )
+            fig_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("Keine Kategorien-Daten verfügbar.")
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Kategorien: {e}")
+
+# nur Premium-Artikel
+with col2:
+    try:
+        cat_counts_prem = load_category_counts(premium_only=True)
+        if cat_counts_prem:
+            labels = list(cat_counts_prem.keys())
+            values = list(cat_counts_prem.values())
+            fig_prem_pie = px.pie(
+                names=labels,
+                values=values,
+                title="Nur Premium",
+                hole=0.3,
+            )
+            fig_prem_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
+            st.plotly_chart(fig_prem_pie, use_container_width=True)
+        else:
+            st.info("Aktuell keine Premium-Artikel vorhanden.")
+    except Exception as e:
+        st.error(f"Fehler beim Erstellen des Premium-Kreisdiagramms: {e}")
+        
 # -----------------------------
 # b) & c) Stündliche Charts (lokale Zeit) – Backend-berechnet
 # -----------------------------
