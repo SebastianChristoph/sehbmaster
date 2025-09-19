@@ -1,38 +1,55 @@
 # backend/app/routes/bild.py
-from fastapi import APIRouter, Depends, Header, HTTPException, status
-from fastapi.responses import JSONResponse
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import func, select, delete, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from typing import List, Dict, Optional
+import os
+
 from ..db import get_session
 from ..models import BildWatch, BildWatchMetrics, BildLog
 from ..schemas import (
     BildWatchIn, BildWatchOut,
-    BildWatchMetricsIn, BildWatchMetricsOut, BildLogIn, BildLogOut,
+    BildWatchMetricsIn, BildWatchMetricsOut,
+    BildLogIn, BildLogOut,
 )
-from pydantic import BaseModel
-from datetime import datetime, timezone
-import os
-from zoneinfo import ZoneInfo
-
+from ..services.bild_charts import (
+    compute_category_counts,
+    compute_hourly_charts,
+    compute_daily_conversions,
+)
 
 router = APIRouter(prefix="/api/bild", tags=["bild"])
 
 API_KEY = os.getenv("INGEST_API_KEY", "dev-secret")
-
-
 TZ = ZoneInfo("Europe/Berlin")
 
+
+# ---------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------
 def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return True
 
-# -------- GET: alle Articles --------
-@router.get("/articles", response_model=list[BildWatchOut])
+
+# ---------------------------------------------------------------------
+# Articles CRUD
+# ---------------------------------------------------------------------
+@router.get("/articles", response_model=List[BildWatchOut])
 def get_all_articles(limit: int = 500, offset: int = 0):
     with get_session() as s:
-        q = select(BildWatch).order_by(BildWatch.published.desc()) \
-                             .offset(offset).limit(limit)
+        q = (
+            select(BildWatch)
+            .order_by(BildWatch.published.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         rows = s.execute(q).scalars().all()
         return [
             BildWatchOut(
@@ -44,7 +61,7 @@ def get_all_articles(limit: int = 500, offset: int = 0):
             for r in rows
         ]
 
-# -------- POST: neuen Article hinzufügen --------
+
 @router.post("/articles", response_model=BildWatchOut, status_code=201)
 def add_article(payload: BildWatchIn, _=Depends(require_api_key)):
     with get_session() as s:
@@ -62,13 +79,14 @@ def add_article(payload: BildWatchIn, _=Depends(require_api_key)):
             converted_duration_hours=obj.converted_duration_hours,
         )
 
-# -------- PATCH: Article per ID teilweise aktualisieren --------
+
 class BildWatchPatch(BaseModel):
-    is_premium: bool | None = None           # <— NEU
-    converted: bool | None = None
-    converted_time: datetime | None = None
-    converted_duration_hours: float | None = None
-    
+    is_premium: Optional[bool] = None
+    converted: Optional[bool] = None
+    converted_time: Optional[datetime] = None
+    converted_duration_hours: Optional[float] = None
+
+
 @router.patch("/articles/{article_id}", response_model=BildWatchOut)
 def update_article(article_id: str, patch: BildWatchPatch, _=Depends(require_api_key)):
     updates = patch.model_dump(exclude_unset=True)
@@ -93,7 +111,7 @@ def update_article(article_id: str, patch: BildWatchPatch, _=Depends(require_api
             converted_duration_hours=obj.converted_duration_hours,
         )
 
-# -------- DELETE: Alle Articles und Metrics löschen --------
+
 @router.delete("/articles", status_code=204, dependencies=[Depends(require_api_key)])
 def delete_all_articles_and_metrics():
     with get_session() as s:
@@ -102,29 +120,94 @@ def delete_all_articles_and_metrics():
         s.commit()
     return
 
-# -------- GET: Kategorien-Counts für Kreisdiagramm --------
+
+# ---------------------------------------------------------------------
+# Legacy (Kompatibilität): einfache Kategorien-Counts
+# ---------------------------------------------------------------------
 @router.get("/articles/category_counts", response_model=dict)
-def get_category_counts():
+def get_category_counts_legacy():
+    """
+    Bewahrt die alte Route für rückwärtskompatible Clients.
+    Entspricht: premium_only = False.
+    """
     with get_session() as s:
         q = (
             s.query(BildWatch.category, func.count(BildWatch.id))
             .group_by(BildWatch.category)
             .all()
         )
-        # category kann None sein, das ggf. als "Unbekannt" labeln
-        result = {}
+        result: Dict[str, int] = {}
         for cat, count in q:
             label = cat if cat is not None else "Unbekannt"
             result[label] = count
-        return JSONResponse(result)
+        return result
 
 
+# ---------------------------------------------------------------------
+# Charts (delegieren an Services)
+# ---------------------------------------------------------------------
+@router.get("/charts/category_counts", response_model=Dict[str, int])
+def chart_category_counts(premium_only: bool = Query(False, description="Nur Premium-Artikel zählen")):
+    with get_session() as s:
+        return compute_category_counts(s, premium_only=premium_only)
+
+
+class HourlyPoint(BaseModel):
+    hour: int               # 0..23
+    Premium: float
+    Nicht_Premium: float
+
+
+class HourlyCharts(BaseModel):
+    snapshot_avg: List[HourlyPoint]
+    new_avg: List[HourlyPoint]
+
+
+@router.get("/charts/hourly", response_model=HourlyCharts)
+def chart_hourly(
+    days: int = Query(60, ge=1, le=365),
+    limit: int = Query(20000, ge=1, le=200000),
+):
+    """
+    Durchschnittswerte je Stunde des Tages (Europe/Berlin):
+    - snapshot_avg: Ø Bestand (Premium vs. Nicht-Premium)
+    - new_avg: Ø neue Artikel (Premium vs. Nicht-Premium)
+    """
+    time_to = datetime.now(timezone.utc)
+    time_from = time_to - timedelta(days=days)
+    with get_session() as s:
+        data = compute_hourly_charts(s, time_from=time_from, time_to=time_to, limit=limit)
+    return data
+
+
+class DailyCount(BaseModel):
+    day: str  # YYYY-MM-DD (lokal)
+    count: int
+
+
+@router.get("/charts/daily_conversions", response_model=List[DailyCount])
+def chart_daily_conversions(
+    days: int = Query(60, ge=1, le=365),
+    limit: int = Query(200000, ge=1, le=2000000),
+):
+    """
+    Umstellungen Premium → frei pro Tag (Europe/Berlin).
+    """
+    time_to = datetime.now(timezone.utc)
+    time_from = time_to - timedelta(days=days)
+    with get_session() as s:
+        return compute_daily_conversions(s, time_from=time_from, time_to=time_to, limit=limit)
+
+
+# ---------------------------------------------------------------------
+# Metrics (raw) + Upsert
+# ---------------------------------------------------------------------
 @router.post("/metrics", response_model=BildWatchMetricsOut, status_code=201)
 def upsert_metrics(payload: BildWatchMetricsIn, _=Depends(require_api_key)):
     """
     Upsert pro Stunde:
-    - Snapshot-Felder werden *überschrieben*
-    - new_count / new_premium_count werden *aufaddiert*
+    - Snapshot-Felder werden überschrieben
+    - new_count / new_premium_count werden aufaddiert
     """
     table = BildWatchMetrics.__table__
     with get_session() as s:
@@ -148,16 +231,17 @@ def upsert_metrics(payload: BildWatchMetricsIn, _=Depends(require_api_key)):
                     "new_premium_count": table.c.new_premium_count + payload.new_premium_count,
                 },
             )
-            .returning(*table.c)  # wir wollen die Zeile zurück
+            .returning(*table.c)
         )
         row = s.execute(stmt).mappings().first()
         s.commit()
         return BildWatchMetricsOut(**row)  # type: ignore[arg-type]
 
-@router.get("/metrics", response_model=list[BildWatchMetricsOut])
+
+@router.get("/metrics", response_model=List[BildWatchMetricsOut])
 def get_metrics(
-    time_from: datetime | None = None,
-    time_to: datetime | None = None,
+    time_from: Optional[datetime] = None,
+    time_to: Optional[datetime] = None,
     limit: int = 1000,
 ):
     """
@@ -185,9 +269,11 @@ def get_metrics(
             )
             for r in rows
         ]
-    
-# ---------- LOGS ----------
 
+
+# ---------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------
 @router.post("/logs", response_model=BildLogOut, status_code=201)
 def add_log(payload: BildLogIn, _=Depends(require_api_key)):
     """
@@ -202,7 +288,8 @@ def add_log(payload: BildLogIn, _=Depends(require_api_key)):
         s.refresh(obj)
         return BildLogOut(id=obj.id, timestamp=obj.timestamp, message=obj.message)
 
-@router.get("/logs", response_model=list[BildLogOut])
+
+@router.get("/logs", response_model=List[BildLogOut])
 def list_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
     """
     Listet Logs, standardmäßig neueste zuerst (desc).
@@ -213,6 +300,7 @@ def list_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
         q = q.limit(limit).offset(offset)
         rows = s.execute(q).scalars().all()
         return [BildLogOut(id=r.id, timestamp=r.timestamp, message=r.message) for r in rows]
+
 
 @router.delete("/logs", status_code=204)
 def delete_all_logs(_=Depends(require_api_key)):

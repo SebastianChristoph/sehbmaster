@@ -1,15 +1,16 @@
-# pages/02_Bildwatch.py
+# streamlit/pages/01_Bildwatch.py
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 
 from api_client import (
     get_bild_articles,
     delete_bild_articles,
-    get_bild_category_counts,
-    get_bild_metrics,
+    get_bild_category_counts,     # jetzt backend-berechnet; supports premium_only
+    get_bild_hourly,              # neu
+    get_bild_daily_conversions,   # neu
     get_bild_logs,
     delete_bild_logs,
 )
@@ -24,119 +25,88 @@ st.caption("Übersicht & Metriken. Zeiten in Europe/Berlin.")
 # Caches / Loader
 # -----------------------------
 @st.cache_data(ttl=15)
-def load_category_counts():
-    return get_bild_category_counts()
+def load_category_counts(premium_only: bool = False):
+    return get_bild_category_counts(premium_only=premium_only)
 
 @st.cache_data(ttl=15)
-def load_metrics(days: int = 60, limit: int = 20000):
-    to_dt = datetime.now(timezone.utc)
-    from_dt = to_dt - timedelta(days=60)
-    return get_bild_metrics(time_from=from_dt.isoformat(), time_to=to_dt.isoformat(), limit=limit)
+def load_hourly(days: int = 60):
+    return get_bild_hourly(days=days)
+
+@st.cache_data(ttl=15)
+def load_daily_conversions(days: int = 60):
+    return get_bild_daily_conversions(days=days)
 
 @st.cache_data(ttl=15)
 def load_articles(limit: int = 20000, offset: int = 0):
     return get_bild_articles(limit=limit, offset=offset)
 
-# Reload-Button (für Artikel/Kategorien/Metriken)
+# Reload-Button
 if st.button("🔄 Neu laden"):
     load_category_counts.clear()
-    load_metrics.clear()
+    load_hourly.clear()
+    load_daily_conversions.clear()
     load_articles.clear()
     st.rerun()
 
 # -----------------------------
-# a) Kreisdiagramm Kategorien
+# a) Kreisdiagramm Kategorien (alle) + nur Premium nebeneinander
 # -----------------------------
-try:
-    cat_counts = load_category_counts()
-    if cat_counts:
-        labels = list(cat_counts.keys())
-        values = list(cat_counts.values())
-        fig_pie = px.pie(
-            names=labels,
-            values=values,
-            title="Verteilung der Kategorien",
-            hole=0.3,
-        )
-        fig_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
-        st.plotly_chart(fig_pie, use_container_width=True)
-    else:
-        st.info("Keine Kategorien-Daten verfügbar.")
-except Exception as e:
-    st.error(f"Fehler beim Laden der Kategorien: {e}")
+st.subheader("Kategorien-Verteilung")
 
-# -----------------------------
-# Kategorien – nur Premium-Artikel
-# -----------------------------
-st.subheader("Kategorien – nur Premium-Artikel")
+col1, col2 = st.columns(2)
 
-try:
-    rows_all = load_articles(limit=20000, offset=0)   # nutzt Cache
-    df_all = pd.DataFrame(rows_all)
-
-    if not df_all.empty:
-        df_prem = df_all[df_all.get("is_premium") == True].copy()
-
-        if not df_prem.empty:
-            # Fehlende/leer Strings sauber behandeln
-            df_prem["category"] = df_prem["category"].fillna("unbekannt").replace("", "unbekannt")
-
-            # EINDEUTIGE Spalten: category + count
-            counts = (
-                df_prem.groupby("category", dropna=False)
-                       .size()
-                       .reset_index(name="count")
-                       .sort_values("count", ascending=False)
+# alle Artikel
+with col1:
+    try:
+        cat_counts = load_category_counts(premium_only=False)
+        if cat_counts:
+            labels = list(cat_counts.keys())
+            values = list(cat_counts.values())
+            fig_pie = px.pie(
+                names=labels,
+                values=values,
+                title="Alle Artikel",
+                hole=0.3,
             )
+            fig_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("Keine Kategorien-Daten verfügbar.")
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Kategorien: {e}")
 
+# nur Premium-Artikel
+with col2:
+    try:
+        cat_counts_prem = load_category_counts(premium_only=True)
+        if cat_counts_prem:
+            labels = list(cat_counts_prem.keys())
+            values = list(cat_counts_prem.values())
             fig_prem_pie = px.pie(
-                counts,
-                names="category",
-                values="count",
-                title="Verteilung der Kategorien (nur Premium)",
+                names=labels,
+                values=values,
+                title="Nur Premium",
                 hole=0.3,
             )
             fig_prem_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
             st.plotly_chart(fig_prem_pie, use_container_width=True)
         else:
             st.info("Aktuell keine Premium-Artikel vorhanden.")
-    else:
-        st.info("Keine Artikel vorhanden.")
-except Exception as e:
-    st.error(f"Fehler beim Erstellen des Premium-Kreisdiagramms: {e}")
-
-
+    except Exception as e:
+        st.error(f"Fehler beim Erstellen des Premium-Kreisdiagramms: {e}")
+        
 # -----------------------------
-# b) & c) Stündliche Charts (lokale Zeit)
+# b) & c) Stündliche Charts (lokale Zeit) – Backend-berechnet
 # -----------------------------
 try:
-    metrics = load_metrics()
-    dfm = pd.DataFrame(metrics)
+    hourly = load_hourly(days=60)  # {"snapshot_avg": [...], "new_avg": [...]}
+    if hourly and (hourly.get("snapshot_avg") or hourly.get("new_avg")):
+        # Snapshot
+        if hourly.get("snapshot_avg"):
+            df_snap = pd.DataFrame(hourly["snapshot_avg"])
+            df_snap = df_snap.sort_values("hour")
+            snap_long = df_snap.melt(id_vars="hour", var_name="Typ", value_name="Ø Bestand")
 
-    if not dfm.empty:
-        dfm["ts_hour"] = pd.to_datetime(dfm["ts_hour"], utc=True, errors="coerce")
-        dfm["ts_hour_local"] = dfm["ts_hour"].dt.tz_convert(TZ)
-        dfm["hour"] = dfm["ts_hour_local"].dt.hour  # 0..23 lokal
-
-        dfm["snapshot_non_premium"] = dfm["snapshot_total"] - dfm["snapshot_premium"]
-        dfm["new_non_premium"] = dfm["new_count"] - dfm["new_premium_count"]
-
-        snap_avg = (
-            dfm.groupby("hour", as_index=False)[["snapshot_premium", "snapshot_non_premium"]]
-              .mean(numeric_only=True).round(2)
-              .rename(columns={"snapshot_premium": "Premium", "snapshot_non_premium": "Nicht-Premium"})
-        )
-        new_avg = (
-            dfm.groupby("hour", as_index=False)[["new_premium_count", "new_non_premium"]]
-              .mean(numeric_only=True).round(3)
-              .rename(columns={"new_premium_count": "Premium", "new_non_premium": "Nicht-Premium"})
-        )
-
-        snap_long = snap_avg.melt(id_vars="hour", var_name="Typ", value_name="Ø Bestand")
-        new_long  = new_avg.melt(id_vars="hour", var_name="Typ", value_name="Ø Neu")
-
-        col1, col2 = st.columns(2)
-        with col1:
             fig_snap = px.bar(
                 snap_long, x="hour", y="Ø Bestand", color="Typ",
                 title="Ø Artikel gesamt pro Stunde (Europe/Berlin)",
@@ -144,8 +114,14 @@ try:
             )
             fig_snap.update_layout(xaxis_title="Stunde (0–23)", yaxis_title="Ø Artikel")
             st.plotly_chart(fig_snap, use_container_width=True)
+        else:
+            st.info("Keine Snapshot-Daten vorhanden.")
 
-        with col2:
+        # New
+        if hourly.get("new_avg"):
+            df_new = pd.DataFrame(hourly["new_avg"]).sort_values("hour")
+            new_long = df_new.melt(id_vars="hour", var_name="Typ", value_name="Ø Neu")
+
             fig_new = px.bar(
                 new_long, x="hour", y="Ø Neu", color="Typ",
                 title="Ø neue Artikel pro Stunde (Europe/Berlin)",
@@ -153,6 +129,8 @@ try:
             )
             fig_new.update_layout(xaxis_title="Stunde (0–23)", yaxis_title="Ø neue Artikel")
             st.plotly_chart(fig_new, use_container_width=True)
+        else:
+            st.info("Keine New-Count-Daten vorhanden.")
     else:
         st.info("Keine Metrik-Daten vorhanden. Läuft der Scraper schon stündlich?")
 except Exception as e:
@@ -163,32 +141,18 @@ except Exception as e:
 # -----------------------------
 st.subheader("Premium → frei pro Tag (Europe/Berlin)")
 try:
-    rows_all = load_articles(limit=20000, offset=0)
-    dfa = pd.DataFrame(rows_all)
-
-    if not dfa.empty and "converted_time" in dfa.columns:
-        dfa = dfa[dfa["converted_time"].notna()].copy()
-        if not dfa.empty:
-            local_ct = pd.to_datetime(dfa["converted_time"], utc=True, errors="coerce").dt.tz_convert(TZ)
-            dfa["day"] = local_ct.dt.strftime("%Y-%m-%d")   # Kategorische Tages-Achse
-
-            conv_daily = (
-                dfa.groupby("day", as_index=False)
-                   .size().rename(columns={"size": "count"})
-                   .sort_values("day")
-            )
-
-            fig_conv = px.bar(
-                conv_daily, x="day", y="count",
-                title="Umstellungen Premium→frei pro Tag",
-                labels={"day": "Tag", "count": "Anzahl Umstellungen"},
-            )
-            fig_conv.update_xaxes(type="category")
-            st.plotly_chart(fig_conv, use_container_width=True)
-        else:
-            st.info("Es liegen noch keine Umstellungen (converted_time) vor.")
+    conv = load_daily_conversions(days=60)  # [{"day":"YYYY-MM-DD","count":N}, ...]
+    if conv:
+        dfc = pd.DataFrame(conv).sort_values("day")
+        fig_conv = px.bar(
+            dfc, x="day", y="count",
+            title="Umstellungen Premium→frei pro Tag",
+            labels={"day": "Tag", "count": "Anzahl Umstellungen"},
+        )
+        fig_conv.update_xaxes(type="category")
+        st.plotly_chart(fig_conv, use_container_width=True)
     else:
-        st.info("Keine Artikel mit converted_time gefunden.")
+        st.info("Es liegen noch keine Umstellungen (converted_time) vor.")
 except Exception as e:
     st.error(f"Fehler beim Auswerten der Umstellungen: {e}")
 
@@ -197,7 +161,7 @@ except Exception as e:
 # -----------------------------
 st.subheader("Alle Artikel (neueste zuerst)")
 try:
-    rows = rows_all if 'rows_all' in locals() else load_articles()
+    rows = load_articles(limit=20000, offset=0)
     if rows:
         df = pd.DataFrame(rows)
         for col in ("published", "converted_time"):
@@ -230,20 +194,7 @@ try:
 except Exception as e:
     st.error(f"Fehler beim Laden der Artikel: {e}")
 
-# -----------------------------
-# Danger-Zone: Alles löschen
-# -----------------------------
-st.divider()
-if st.button("🗑️ Alle Bildwatch-Einträge und Metriken löschen", type="primary"):
-    try:
-        delete_bild_articles()
-        load_articles.clear()
-        load_category_counts.clear()
-        load_metrics.clear()
-        st.success("Alle Einträge wurden gelöscht.")
-        st.rerun()
-    except Exception as e:
-        st.error(str(e))
+
 
 # -----------------------------
 # LOGS (Lazy Load)
@@ -275,7 +226,8 @@ if st.session_state.show_logs:
         dfl = pd.DataFrame(logs)
         if not dfl.empty:
             dfl["timestamp"] = pd.to_datetime(dfl["timestamp"], utc=True, errors="coerce").dt.tz_convert(TZ)
-            dfl = dfl[["timestamp", "message", "id"]] if set(["timestamp","message","id"]).issubset(dfl.columns) else dfl
+            subset = ["timestamp", "message", "id"]
+            dfl = dfl[subset] if set(subset).issubset(dfl.columns) else dfl
             st.dataframe(
                 dfl.sort_values("timestamp"),
                 use_container_width=True,
