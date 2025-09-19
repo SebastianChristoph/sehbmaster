@@ -63,3 +63,19 @@ class BildWatchMetrics(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
+
+
+class BildLog(Base):
+    __tablename__ = "log"
+    __table_args__ = ({"schema": "bild"},)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Zeitzone-aware; in der DB default NOW()
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    message: Mapped[str] = mapped_column(Text, nullable=False)
