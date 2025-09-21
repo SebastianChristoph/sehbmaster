@@ -147,7 +147,9 @@ def delete_bild_logs():
 
 
 # --- Weatherwatch ---
+# --- Weatherwatch ---
 def upsert_weather_data(payload: dict, api_key: str | None = None):
+    # payload MUSS jetzt city enthalten
     headers = {"Content-Type": "application/json"}
     if api_key is None:
         api_key = os.getenv("INGEST_API_KEY", "dev-secret")
@@ -155,30 +157,15 @@ def upsert_weather_data(payload: dict, api_key: str | None = None):
     r = requests.post(f"{API_BASE}/weather/data", json=payload, headers=headers, timeout=10)
     return _json_or_raise(r)
 
-def get_weather_data(date_from: str | None = None, date_to: str | None = None, model: str = "default", lead_days: int | None = None, limit: int = 5000):
-    params = {"model": model, "limit": limit}
+def get_weather_data(date_from: str | None = None, date_to: str | None = None, model: str = "default", city: str = "berlin", lead_days: int | None = None, limit: int = 5000):
+    params = {"model": model, "city": city, "limit": limit}
     if date_from: params["date_from"] = date_from
     if date_to:   params["date_to"]   = date_to
     if lead_days is not None: params["lead_days"] = lead_days
     r = requests.get(f"{API_BASE}/weather/data", params=params, timeout=10)
     return _json_or_raise(r)
 
-def get_weather_accuracy(date_from: str, date_to: str, model: str = "default", max_lead: int = 7):
-    params = {"date_from": date_from, "date_to": date_to, "model": model, "max_lead": max_lead}
+def get_weather_accuracy(date_from: str, date_to: str, model: str = "default", city: str = "berlin", max_lead: int = 7):
+    params = {"date_from": date_from, "date_to": date_to, "model": model, "city": city, "max_lead": max_lead}
     r = requests.get(f"{API_BASE}/weather/accuracy", params=params, timeout=10)
     return _json_or_raise(r)
-
-def get_weather_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
-    params = {"limit": limit, "offset": offset, "asc": str(asc).lower()}
-    r = requests.get(f"{API_BASE}/weather/logs", params=params, timeout=10)
-    return _json_or_raise(r)
-
-def delete_weather_logs():
-    api_key = os.getenv("INGEST_API_KEY", "dev-secret")
-    r = requests.delete(f"{API_BASE}/weather/logs", headers={"X-API-Key": api_key}, timeout=10)
-    if r.status_code not in (200, 204):
-        try:
-            msg = r.json()
-        except Exception:
-            msg = r.text
-        raise ApiError(f"Fehler beim Löschen der Weather-Logs: {msg}")

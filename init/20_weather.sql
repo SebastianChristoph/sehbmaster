@@ -1,24 +1,25 @@
--- init/20_weather.sql
--- Einmalig vom Postgres-Container ausgeführt (docker-entrypoint-initdb.d)
-
 CREATE SCHEMA IF NOT EXISTS "weather";
 
 CREATE TABLE IF NOT EXISTS "weather"."data" (
-  id                BIGSERIAL PRIMARY KEY,
-  target_date       DATE NOT NULL,              -- der Tag, für den die Vorhersage gilt
-  lead_days         SMALLINT NOT NULL CHECK (lead_days BETWEEN 0 AND 7),
-  model             TEXT NOT NULL DEFAULT 'default',
-  run_time          TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- wann der Scraper diese Vorhersage gespeichert hat
+  id          BIGSERIAL PRIMARY KEY,
+  target_date DATE NOT NULL,
+  lead_days   SMALLINT NOT NULL CHECK (lead_days BETWEEN 0 AND 7),
+  model       TEXT NOT NULL DEFAULT 'default',
+  city        TEXT NOT NULL,                      -- NEU
+  run_time    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  weather           TEXT,                       -- z.B. "sunny", "rain", ...
-  temp_c            REAL,                       -- Tages-Mittel oder -Max, wie du willst
-  wind_mps          REAL,
-  rain_mm           REAL,
+  weather     TEXT,
+  temp_c      REAL,
+  wind_mps    REAL,
+  rain_mm     REAL,
 
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT uq_weather UNIQUE (target_date, model, lead_days)
+  CONSTRAINT uq_weather UNIQUE (target_date, model, city, lead_days)
 );
+
+CREATE INDEX IF NOT EXISTS idx_weather_model_city_date
+  ON "weather"."data"(model, city, target_date);
 
 CREATE TABLE IF NOT EXISTS "weather"."log" (
   id BIGSERIAL PRIMARY KEY,

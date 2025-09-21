@@ -2,13 +2,14 @@
 from __future__ import annotations
 from datetime import datetime, date
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 # --- CRUD ---
 class WeatherDataIn(BaseModel):
     target_date: date
     lead_days: int = Field(ge=0, le=7)
     model: str = "default"
+    city: str                                # NEU
     run_time: datetime
 
     weather: Optional[str] = None
@@ -33,14 +34,15 @@ class WeatherLogOut(BaseModel):
 # --- Accuracy response ---
 class LeadBucketAccuracy(BaseModel):
     lead_days: int
-    n: int                               # Anzahl verglichener Tage
+    n: int
     temp_mae: Optional[float] = None
     wind_mae: Optional[float] = None
     rain_mae: Optional[float] = None
-    weather_match_pct: Optional[float] = None  # 0..100
+    weather_match_pct: Optional[float] = None
 
 class AccuracySummary(BaseModel):
     model: str
+    city: str                                # NEU
     from_date: date
     to_date: date
     buckets: List[LeadBucketAccuracy]

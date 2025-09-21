@@ -29,7 +29,7 @@ def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
 @router.post("/data", response_model=WeatherDataOut, status_code=201)
 def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
     """
-    Upsert per (target_date, model, lead_days).
+    Upsert per (target_date, model, city, lead_days).
     """
     table = WeatherData.__table__
     with get_session() as s:
@@ -39,6 +39,7 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
                 target_date=payload.target_date,
                 lead_days=payload.lead_days,
                 model=payload.model,
+                city=payload.city,
                 run_time=payload.run_time,
                 weather=payload.weather,
                 temp_c=payload.temp_c,
@@ -46,7 +47,7 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
                 rain_mm=payload.rain_mm,
             )
             .on_conflict_do_update(
-                index_elements=[table.c.target_date, table.c.model, table.c.lead_days],
+                index_elements=[table.c.target_date, table.c.model, table.c.city, table.c.lead_days],
                 set_={
                     "run_time": payload.run_time,
                     "weather": payload.weather,
@@ -66,12 +67,13 @@ def list_weather_data(
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     model: str = Query("default"),
+    city: str = Query(..., description="z.B. berlin"),   # NEU required
     lead_days: Optional[int] = Query(None, ge=0, le=7),
     limit: int = Query(5000, ge=1, le=100000),
     offset: int = Query(0, ge=0),
 ):
     with get_session() as s:
-        q = select(WeatherData).where(WeatherData.model == model)
+        q = select(WeatherData).where(WeatherData.model == model, WeatherData.city == city)
         if date_from:
             q = q.where(WeatherData.target_date >= date_from)
         if date_to:
@@ -87,6 +89,7 @@ def list_weather_data(
                 target_date=r.target_date,
                 lead_days=r.lead_days,
                 model=r.model,
+                city=r.city,
                 run_time=r.run_time,
                 weather=r.weather,
                 temp_c=r.temp_c,
@@ -102,17 +105,17 @@ def get_accuracy(
     date_from: date = Query(..., description="inklusive"),
     date_to: date = Query(..., description="inklusive"),
     model: str = Query("default"),
+    city: str = Query(..., description="z.B. berlin"),      # NEU
     max_lead: int = Query(7, ge=0, le=7),
 ):
     """
-    Vergleicht Vorhersagen mit lead_days=1..max_lead gegen die Beobachtung lead_days=0
-    für denselben target_date. Liefert MAE (absolute Fehler) und % exakte Wetter-String-Treffer.
+    Vergleicht Vorhersagen (lead=1..max_lead) gegen Beobachtung (lead=0) für denselben target_date, model und city.
     """
     with get_session() as s:
-        # hole Beobachtungen (lead=0)
         obs_rows = s.execute(
             select(WeatherData).where(
                 WeatherData.model == model,
+                WeatherData.city == city,
                 WeatherData.lead_days == 0,
                 WeatherData.target_date >= date_from,
                 WeatherData.target_date <= date_to,
@@ -125,6 +128,7 @@ def get_accuracy(
             fc_rows = s.execute(
                 select(WeatherData).where(
                     WeatherData.model == model,
+                    WeatherData.city == city,
                     WeatherData.lead_days == d,
                     WeatherData.target_date >= date_from,
                     WeatherData.target_date <= date_to,
@@ -140,7 +144,7 @@ def get_accuracy(
             for fc in fc_rows:
                 obs = obs_by_day.get(fc.target_date)
                 if not obs:
-                    continue  # keine Beobachtung -> kein Vergleich
+                    continue
                 n += 1
                 if fc.temp_c is not None and obs.temp_c is not None:
                     temp_abs_err += abs(fc.temp_c - obs.temp_c)
@@ -162,9 +166,9 @@ def get_accuracy(
                 )
             )
 
-        return AccuracySummary(model=model, from_date=date_from, to_date=date_to, buckets=buckets)
+        return AccuracySummary(model=model, city=city, from_date=date_from, to_date=date_to, buckets=buckets)
 
-# ----------------------- Logs -----------------------
+# ----------------------- Logs (unverändert) -----------------------
 @router.post("/logs", response_model=WeatherLogOut, status_code=201)
 def add_log(payload: WeatherLogIn, _=Depends(require_api_key)):
     ts = payload.timestamp or datetime.now(timezone.utc)

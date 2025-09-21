@@ -17,6 +17,7 @@ class WeatherData(BaseWeather):
     target_date: Mapped[date] = mapped_column(Date, nullable=False)
     lead_days: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     model: Mapped[str] = mapped_column(String, nullable=False, default="default")
+    city: Mapped[str] = mapped_column(String, nullable=False)  # NEU
     run_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     weather: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
