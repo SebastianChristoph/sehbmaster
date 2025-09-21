@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import select, text
+from sqlalchemy import select, text, delete, and_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from datetime import datetime, date, timezone
-from typing import List, Optional, Dict
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
+from typing import List, Optional, Dict, Any
 import os
 
 from ..db import get_session
@@ -19,11 +20,14 @@ from ..schemas_weather import (
 router = APIRouter(prefix="/api/weather", tags=["weather"])
 
 API_KEY = os.getenv("INGEST_API_KEY", "dev-secret")
+TZ = ZoneInfo("Europe/Berlin")
+
 
 def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return True
+
 
 # ----------------------- CRUD: data -----------------------
 @router.post("/data", response_model=WeatherDataOut, status_code=201)
@@ -62,12 +66,13 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
         s.commit()
         return WeatherDataOut(**row)  # type: ignore[arg-type]
 
+
 @router.get("/data", response_model=List[WeatherDataOut])
 def list_weather_data(
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     model: str = Query("default"),
-    city: str = Query(..., description="z.B. berlin"),   # NEU required
+    city: str = Query(..., description="z.B. berlin"),
     lead_days: Optional[int] = Query(None, ge=0, le=7),
     limit: int = Query(5000, ge=1, le=100000),
     offset: int = Query(0, ge=0),
@@ -99,13 +104,77 @@ def list_weather_data(
             ) for r in rows
         ]
 
+
+@router.delete("/data", status_code=204)
+def delete_all_weather_data(_=Depends(require_api_key)):
+    """
+    Löscht ALLE Einträge aus weather.data.
+    """
+    with get_session() as s:
+        s.execute(delete(WeatherData))
+        s.commit()
+    return
+
+
+# ----------------------- Helper: „heute schon gelaufen?“ -----------------------
+@router.get("/runs/today")
+def runs_today(
+    model: str = Query("default"),
+    city: str = Query(..., description="z.B. berlin"),
+    tz: str = Query("Europe/Berlin"),
+) -> Dict[str, Any]:
+    """
+    Prüft, ob es HEUTE (lokal in 'tz') bereits WeatherData-Run(s) für (model, city) gab.
+    Rückgabe:
+    {
+      "already_scraped": bool,
+      "count": int,
+      "first_run_time": "...",
+      "last_run_time": "..."
+    }
+    """
+    local_tz = ZoneInfo(tz)
+    now_local = datetime.now(local_tz)
+    start_local = datetime.combine(now_local.date(), datetime.min.time(), tzinfo=local_tz)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+
+    with get_session() as s:
+        q = (
+            select(WeatherData)
+            .where(
+                WeatherData.model == model,
+                WeatherData.city == city,
+                WeatherData.run_time >= start_utc,
+                WeatherData.run_time < end_utc,
+            )
+            .order_by(WeatherData.run_time.asc())
+        )
+        rows = s.execute(q).scalars().all()
+
+    count = len(rows)
+    first_rt = rows[0].run_time.isoformat() if count else None
+    last_rt = rows[-1].run_time.isoformat() if count else None
+    return {
+        "already_scraped": count > 0,
+        "count": count,
+        "first_run_time": first_rt,
+        "last_run_time": last_rt,
+        "model": model,
+        "city": city,
+        "day_local": now_local.date().isoformat(),
+        "tz": tz,
+    }
+
+
 # ----------------------- Accuracy -----------------------
 @router.get("/accuracy", response_model=AccuracySummary)
 def get_accuracy(
     date_from: date = Query(..., description="inklusive"),
     date_to: date = Query(..., description="inklusive"),
     model: str = Query("default"),
-    city: str = Query(..., description="z.B. berlin"),      # NEU
+    city: str = Query(..., description="z.B. berlin"),
     max_lead: int = Query(7, ge=0, le=7),
 ):
     """
@@ -168,7 +237,8 @@ def get_accuracy(
 
         return AccuracySummary(model=model, city=city, from_date=date_from, to_date=date_to, buckets=buckets)
 
-# ----------------------- Logs (unverändert) -----------------------
+
+# ----------------------- Logs -----------------------
 @router.post("/logs", response_model=WeatherLogOut, status_code=201)
 def add_log(payload: WeatherLogIn, _=Depends(require_api_key)):
     ts = payload.timestamp or datetime.now(timezone.utc)
@@ -179,6 +249,7 @@ def add_log(payload: WeatherLogIn, _=Depends(require_api_key)):
         s.refresh(obj)
         return WeatherLogOut(id=obj.id, timestamp=obj.timestamp, message=obj.message)
 
+
 @router.get("/logs", response_model=List[WeatherLogOut])
 def list_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
     with get_session() as s:
@@ -187,6 +258,7 @@ def list_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
         q = q.limit(limit).offset(offset)
         rows = s.execute(q).scalars().all()
         return [WeatherLogOut(id=r.id, timestamp=r.timestamp, message=r.message) for r in rows]
+
 
 @router.delete("/logs", status_code=204)
 def delete_all_logs(_=Depends(require_api_key)):
