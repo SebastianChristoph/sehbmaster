@@ -1,51 +1,40 @@
-# backend/app/schemas_weather.py
+# backend/app/models_weather.py
 from __future__ import annotations
 from datetime import datetime, date
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional
 
-# --- CRUD ---
-class WeatherDataIn(BaseModel):
-    target_date: date
-    lead_days: int = Field(ge=0, le=7)
-    model: str = "default"
-    city: str
-    run_time: datetime
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import BigInteger, SmallInteger, String, Date, Float, Text, DateTime
 
-    weather: Optional[str] = None
-    temp_avg_c: Optional[float] = None    # optionaler Komfort (für Backfill/Alt)
-    temp_min_c: Optional[float] = None
-    temp_max_c: Optional[float] = None
-    wind_mps: Optional[float] = None
-    rain_mm: Optional[float] = None
+class BaseWeather(DeclarativeBase):
+    pass
 
-class WeatherDataOut(WeatherDataIn):
-    id: int
-    created_at: datetime
+class WeatherData(BaseWeather):
+    __tablename__ = "data"
+    __table_args__ = {"schema": "weather"}
 
-# --- Logs ---
-class WeatherLogIn(BaseModel):
-    timestamp: Optional[datetime] = None
-    message: str
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    target_date: Mapped[date] = mapped_column(Date, nullable=False)
+    lead_days: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False, default="default")
+    city: Mapped[str] = mapped_column(String, nullable=False)
+    run_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-class WeatherLogOut(BaseModel):
-    id: int
-    timestamp: datetime
-    message: str
+    weather: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # NEU: getrennte Temperaturen (+ Alt-Kompatibilität über temp_avg_c)
+    temp_avg_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    temp_min_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    temp_max_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
-# --- Accuracy response ---
-class LeadBucketAccuracy(BaseModel):
-    lead_days: int
-    n: int
-    temp_min_mae: Optional[float] = None
-    temp_max_mae: Optional[float] = None
-    wind_mae: Optional[float] = None
-    rain_mae: Optional[float] = None
-    weather_match_pct: Optional[float] = None
+    wind_mps: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rain_mm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
-class AccuracySummary(BaseModel):
-    model: str
-    city: str
-    from_date: date
-    to_date: date
-    buckets: List[LeadBucketAccuracy]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+class WeatherLog(BaseWeather):
+    __tablename__ = "log"
+    __table_args__ = {"schema": "weather"}
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
