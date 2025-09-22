@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import select, text, delete, and_
+from sqlalchemy import select, text, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import List, Optional, Dict, Any
-import os
+import os, math
 
 from ..db import get_session
 from ..models_weather import WeatherData, WeatherLog
@@ -18,23 +18,17 @@ from ..schemas_weather import (
 )
 
 router = APIRouter(prefix="/api/weather", tags=["weather"])
-
 API_KEY = os.getenv("INGEST_API_KEY", "dev-secret")
 TZ = ZoneInfo("Europe/Berlin")
-
 
 def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return True
 
-
-# ----------------------- CRUD: data -----------------------
+# ---------- UPSERT ----------
 @router.post("/data", response_model=WeatherDataOut, status_code=201)
 def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
-    """
-    Upsert per (target_date, model, city, lead_days).
-    """
     table = WeatherData.__table__
     with get_session() as s:
         stmt = (
@@ -46,7 +40,9 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
                 city=payload.city,
                 run_time=payload.run_time,
                 weather=payload.weather,
-                temp_c=payload.temp_c,
+                temp_avg_c=payload.temp_avg_c,
+                temp_min_c=payload.temp_min_c,
+                temp_max_c=payload.temp_max_c,
                 wind_mps=payload.wind_mps,
                 rain_mm=payload.rain_mm,
             )
@@ -55,7 +51,9 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
                 set_={
                     "run_time": payload.run_time,
                     "weather": payload.weather,
-                    "temp_c": payload.temp_c,
+                    "temp_avg_c": payload.temp_avg_c,
+                    "temp_min_c": payload.temp_min_c,
+                    "temp_max_c": payload.temp_max_c,
                     "wind_mps": payload.wind_mps,
                     "rain_mm": payload.rain_mm,
                 },
@@ -66,13 +64,13 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
         s.commit()
         return WeatherDataOut(**row)  # type: ignore[arg-type]
 
-
+# ---------- SELECT ----------
 @router.get("/data", response_model=List[WeatherDataOut])
 def list_weather_data(
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     model: str = Query("default"),
-    city: str = Query(..., description="z.B. berlin"),
+    city: str = Query(...),
     lead_days: Optional[int] = Query(None, ge=0, le=7),
     limit: int = Query(5000, ge=1, le=100000),
     offset: int = Query(0, ge=0),
@@ -97,89 +95,58 @@ def list_weather_data(
                 city=r.city,
                 run_time=r.run_time,
                 weather=r.weather,
-                temp_c=r.temp_c,
+                temp_avg_c=r.temp_avg_c,
+                temp_min_c=r.temp_min_c,
+                temp_max_c=r.temp_max_c,
                 wind_mps=r.wind_mps,
                 rain_mm=r.rain_mm,
                 created_at=r.created_at,
             ) for r in rows
         ]
 
-
+# ---------- DELETE ALL ----------
 @router.delete("/data", status_code=204)
 def delete_all_weather_data(_=Depends(require_api_key)):
-    """
-    Löscht ALLE Einträge aus weather.data.
-    """
     with get_session() as s:
         s.execute(delete(WeatherData))
         s.commit()
     return
 
-
-# ----------------------- Helper: „heute schon gelaufen?“ -----------------------
+# ---------- runs/today ----------
 @router.get("/runs/today")
-def runs_today(
-    model: str = Query("default"),
-    city: str = Query(..., description="z.B. berlin"),
-    tz: str = Query("Europe/Berlin"),
-) -> Dict[str, Any]:
-    """
-    Prüft, ob es HEUTE (lokal in 'tz') bereits WeatherData-Run(s) für (model, city) gab.
-    Rückgabe:
-    {
-      "already_scraped": bool,
-      "count": int,
-      "first_run_time": "...",
-      "last_run_time": "..."
-    }
-    """
+def runs_today(model: str = Query("default"), city: str = Query(...), tz: str = Query("Europe/Berlin")) -> Dict[str, Any]:
     local_tz = ZoneInfo(tz)
     now_local = datetime.now(local_tz)
     start_local = datetime.combine(now_local.date(), datetime.min.time(), tzinfo=local_tz)
     end_local = start_local + timedelta(days=1)
     start_utc = start_local.astimezone(timezone.utc)
     end_utc = end_local.astimezone(timezone.utc)
-
     with get_session() as s:
-        q = (
-            select(WeatherData)
-            .where(
+        rows = s.execute(
+            select(WeatherData).where(
                 WeatherData.model == model,
                 WeatherData.city == city,
                 WeatherData.run_time >= start_utc,
                 WeatherData.run_time < end_utc,
-            )
-            .order_by(WeatherData.run_time.asc())
-        )
-        rows = s.execute(q).scalars().all()
-
-    count = len(rows)
-    first_rt = rows[0].run_time.isoformat() if count else None
-    last_rt = rows[-1].run_time.isoformat() if count else None
+            ).order_by(WeatherData.run_time.asc())
+        ).scalars().all()
     return {
-        "already_scraped": count > 0,
-        "count": count,
-        "first_run_time": first_rt,
-        "last_run_time": last_rt,
-        "model": model,
-        "city": city,
-        "day_local": now_local.date().isoformat(),
-        "tz": tz,
+        "already_scraped": len(rows) > 0,
+        "count": len(rows),
+        "first_run_time": rows[0].run_time.isoformat() if rows else None,
+        "last_run_time": rows[-1].run_time.isoformat() if rows else None,
+        "model": model, "city": city, "day_local": now_local.date().isoformat(), "tz": tz,
     }
 
-
-# ----------------------- Accuracy -----------------------
+# ---------- ACCURACY ----------
 @router.get("/accuracy", response_model=AccuracySummary)
 def get_accuracy(
-    date_from: date = Query(..., description="inklusive"),
-    date_to: date = Query(..., description="inklusive"),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
     model: str = Query("default"),
-    city: str = Query(..., description="z.B. berlin"),
+    city: str = Query(...),
     max_lead: int = Query(7, ge=0, le=7),
 ):
-    """
-    Vergleicht Vorhersagen (lead=1..max_lead) gegen Beobachtung (lead=0) für denselben target_date, model und city.
-    """
     with get_session() as s:
         obs_rows = s.execute(
             select(WeatherData).where(
@@ -205,9 +172,10 @@ def get_accuracy(
             ).scalars().all()
 
             n = 0
-            temp_abs_err = 0.0
-            wind_abs_err = 0.0
-            rain_abs_err = 0.0
+            temp_min_err = 0.0
+            temp_max_err = 0.0
+            wind_err = 0.0
+            rain_err = 0.0
             weather_match = 0
 
             for fc in fc_rows:
@@ -215,12 +183,14 @@ def get_accuracy(
                 if not obs:
                     continue
                 n += 1
-                if fc.temp_c is not None and obs.temp_c is not None:
-                    temp_abs_err += abs(fc.temp_c - obs.temp_c)
+                if fc.temp_min_c is not None and obs.temp_min_c is not None:
+                    temp_min_err += abs(fc.temp_min_c - obs.temp_min_c)
+                if fc.temp_max_c is not None and obs.temp_max_c is not None:
+                    temp_max_err += abs(fc.temp_max_c - obs.temp_max_c)
                 if fc.wind_mps is not None and obs.wind_mps is not None:
-                    wind_abs_err += abs(fc.wind_mps - obs.wind_mps)
+                    wind_err += abs(fc.wind_mps - obs.wind_mps)
                 if fc.rain_mm is not None and obs.rain_mm is not None:
-                    rain_abs_err += abs(fc.rain_mm - obs.rain_mm)
+                    rain_err += abs(fc.rain_mm - obs.rain_mm)
                 if fc.weather and obs.weather:
                     weather_match += int(fc.weather.strip().lower() == obs.weather.strip().lower())
 
@@ -228,41 +198,35 @@ def get_accuracy(
                 LeadBucketAccuracy(
                     lead_days=d,
                     n=n,
-                    temp_mae=round(temp_abs_err / n, 3) if n else None,
-                    wind_mae=round(wind_abs_err / n, 3) if n else None,
-                    rain_mae=round(rain_abs_err / n, 3) if n else None,
+                    temp_min_mae=round(temp_min_err / n, 3) if n else None,
+                    temp_max_mae=round(temp_max_err / n, 3) if n else None,
+                    wind_mae=round(wind_err / n, 3) if n else None,
+                    rain_mae=round(rain_err / n, 3) if n else None,
                     weather_match_pct=round((weather_match / n) * 100.0, 2) if n else None,
                 )
             )
 
         return AccuracySummary(model=model, city=city, from_date=date_from, to_date=date_to, buckets=buckets)
 
-
-# ----------------------- Logs -----------------------
+# ---------- LOGS ----------
 @router.post("/logs", response_model=WeatherLogOut, status_code=201)
 def add_log(payload: WeatherLogIn, _=Depends(require_api_key)):
     ts = payload.timestamp or datetime.now(timezone.utc)
     with get_session() as s:
         obj = WeatherLog(timestamp=ts, message=payload.message)
-        s.add(obj)
-        s.commit()
-        s.refresh(obj)
+        s.add(obj); s.commit(); s.refresh(obj)
         return WeatherLogOut(id=obj.id, timestamp=obj.timestamp, message=obj.message)
-
 
 @router.get("/logs", response_model=List[WeatherLogOut])
 def list_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
     with get_session() as s:
-        q = select(WeatherLog)
-        q = q.order_by(WeatherLog.timestamp.asc() if asc else WeatherLog.timestamp.desc())
+        q = select(WeatherLog).order_by(WeatherLog.timestamp.asc() if asc else WeatherLog.timestamp.desc())
         q = q.limit(limit).offset(offset)
         rows = s.execute(q).scalars().all()
         return [WeatherLogOut(id=r.id, timestamp=r.timestamp, message=r.message) for r in rows]
 
-
 @router.delete("/logs", status_code=204)
 def delete_all_logs(_=Depends(require_api_key)):
     with get_session() as s:
-        s.execute(text('TRUNCATE TABLE "weather"."log";'))
-        s.commit()
+        s.execute(text('TRUNCATE TABLE "weather"."log";')); s.commit()
     return
