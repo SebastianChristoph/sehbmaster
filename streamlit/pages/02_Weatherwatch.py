@@ -15,10 +15,16 @@ st.set_page_config(page_title="sehbmaster – Weatherwatch", page_icon="⛅", la
 st.title("⛅ Weatherwatch")
 st.caption("Vorhersage-Güte (Lead 1..N) vs. Beobachtung (Lead 0). Temperaturen: Min/Max separat.")
 
-KNOWN_MODELS = ["open-meteo", "metno", "default"]
-KNOWN_CITIES = ["berlin", "hamburg", "muenchen", "koeln", "frankfurt", "stuttgart", "duesseldorf",
-                "dortmund", "essen", "leipzig", "bremen", "dresden", "hannover", "nuernberg",
-                "duisburg", "bochum", "wuppertal", "bielefeld", "bonn", "muenster"]
+# ➜ NEU: wettercom als weiteres Modell
+KNOWN_MODELS = ["open-meteo", "metno", "wettercom", "default"]
+
+# Städte (Slugs). Du kannst hier jederzeit erweitern.
+KNOWN_CITIES = [
+    "berlin", "hamburg", "muenchen", "koeln", "frankfurt", "stuttgart",
+    "duesseldorf", "dortmund", "essen", "leipzig", "bremen", "dresden",
+    "hannover", "nuernberg", "duisburg", "bochum", "wuppertal", "bielefeld",
+    "bonn", "muenster", "rostock"
+]
 
 @st.cache_data(ttl=30)
 def load_accuracy(frm: date, to: date, model: str, city: str, max_lead: int):
@@ -26,11 +32,14 @@ def load_accuracy(frm: date, to: date, model: str, city: str, max_lead: int):
 
 @st.cache_data(ttl=30)
 def load_data_window(days_back: int, days_forward: int, model: str, city: str):
+    # Zukunft (heute + days_forward) einschließen, damit neue Forecasts sofort sichtbar sind
     window_to = date.today() + timedelta(days=days_forward)
     window_from = date.today() - timedelta(days=days_back)
     return get_weather_data(window_from.isoformat(), window_to.isoformat(), model=model, city=city, lead_days=None, limit=10000)
 
+# -----------------------------
 # Controls
+# -----------------------------
 colA, colB, colC, colD = st.columns([1,1,1,1])
 with colA:
     days_back = st.slider("Zeitraum (Tage zurück)", 7, 180, 35)
@@ -47,14 +56,19 @@ to = date.today()
 if st.button("🔄 Neu laden"):
     load_accuracy.clear(); load_data_window.clear(); st.rerun()
 
-# Accuracy
+# -----------------------------
+# Accuracy (MAE + Wetterstring)
+# -----------------------------
 try:
     acc = load_accuracy(frm, to, model=model, city=city, max_lead=max_lead)
     buckets = (acc or {}).get("buckets", [])
     if buckets:
         df = pd.DataFrame(buckets).sort_values("lead_days")
         if df["n"].fillna(0).sum() == 0:
-            st.info("Noch keine Vergleichspaare (lead ≥ 1 vs. lead = 0).")
+            st.info(
+                "Noch keine Vergleichspaare (lead ≥ 1 vs. lead = 0) im gewählten Zeitraum. "
+                "Das ist normal, wenn es für die Tage noch keine Beobachtungen (lead 0) gibt."
+            )
         c1, c2 = st.columns(2)
         with c1:
             fig_min = px.line(df, x="lead_days", y="temp_min_mae", markers=True,
@@ -94,9 +108,12 @@ except Exception as e:
 
 st.divider()
 
-# Rohdaten
+# -----------------------------
+# Rohdaten (zur Kontrolle)
+# -----------------------------
 with st.expander("Rohdaten (zur Kontrolle)"):
     try:
+        # +7 Tage in die Zukunft, damit neue Einträge sofort sichtbar sind
         rows = load_data_window(days_back, 7, model=model, city=city)
         dfr = pd.DataFrame(rows)
         if not dfr.empty:
@@ -104,11 +121,13 @@ with st.expander("Rohdaten (zur Kontrolle)"):
             st.dataframe(dfr, use_container_width=True, hide_index=True)
             st.caption(f"{len(dfr)} Zeilen")
         else:
-            st.info("Keine Daten im Fenster.")
+            st.info("Keine Daten im aktuellen Fenster. Prüfe Modell/Stadt oder Zeitfenster.")
     except Exception as e:
         st.error(f"Fehler beim Laden der Rohdaten: {e}")
 
+# -----------------------------
 # Logs
+# -----------------------------
 st.divider()
 st.subheader("Logs (weather.log)")
 if "show_weather_logs" not in st.session_state:
