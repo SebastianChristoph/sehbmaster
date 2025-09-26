@@ -4,6 +4,7 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 from datetime import date, timedelta
+from typing import List, Dict
 
 from api_client import (
     get_weather_accuracy,
@@ -26,13 +27,14 @@ KNOWN_CITIES = [
     "hannover", "nuernberg", "duisburg", "bochum", "wuppertal", "bielefeld",
     "bonn", "muenster", "rostock"
 ]
+CITY_ALL_LABEL = "ALL (alle Städte)"
+
 NUM_VARS = {
     "temp_min_c": {"title": "Min Temperatur (°C)", "unit": "°C"},
     "temp_max_c": {"title": "Max Temperatur (°C)", "unit": "°C"},
     "wind_mps":   {"title": "Wind (m/s)", "unit": "m/s"},
     "rain_mm":    {"title": "Regen (mm)", "unit": "mm"},
 }
-WEATHER_VAR = "weather"
 
 # Default-Ampelschwellen für absolute Fehler |Forecast - Obs|
 DEFAULT_THRESHOLDS = {
@@ -70,7 +72,7 @@ with colB:
 with colC:
     model = st.selectbox("Modell", options=KNOWN_MODELS, index=0)
 with colD:
-    city = st.selectbox("Stadt", options=KNOWN_CITIES, index=0)
+    city = st.selectbox("Stadt", options=[CITY_ALL_LABEL] + KNOWN_CITIES, index=1)
 
 frm = date.today() - timedelta(days=days_back)
 to = date.today()
@@ -100,133 +102,176 @@ if st.button("🔄 Neu laden"):
 # ---------------------------------
 def list_leads_used(series: pd.Series) -> str:
     leads = sorted([int(x) for x in series.tolist()])
-    if not leads:
-        return "–"
-    return ", ".join(str(x) for x in leads)
+    return ", ".join(str(x) for x in leads) if leads else "–"
 
-def caption_mae(kind: str, df_acc: pd.DataFrame, model: str, city: str, frm: date, to: date):
+def caption_mae(kind: str, df_acc: pd.DataFrame, model: str, city_lbl: str, frm: date, to: date):
     n_total = int(df_acc["n"].fillna(0).sum())
     leads_ok = df_acc.loc[df_acc["n"].fillna(0) > 0, "lead_days"]
     st.caption(
         f"{kind} – MAE = mittlerer absoluter Fehler |Vorhersage − Beobachtung|. "
         f"Zeitraum: {frm} bis {to}. Leads: {list_leads_used(leads_ok)}. "
-        f"Datenpunkte (Paare): {n_total}. Quelle: Backend /api/weather/accuracy – Modell: {model}, Stadt: {city}."
+        f"Datenpunkte (Paare): {n_total}. Quelle: Backend /api/weather/accuracy – Modell: {model}, Stadt: {city_lbl}."
     )
 
-def caption_weather_string(df_acc: pd.DataFrame, model: str, city: str, frm: date, to: date):
+def caption_weather_string(df_acc: pd.DataFrame, model: str, city_lbl: str, frm: date, to: date):
     n_total = int(df_acc["n"].fillna(0).sum())
     leads_ok = df_acc.loc[df_acc["n"].fillna(0) > 0, "lead_days"]
     st.caption(
-        f"Wetter-String (exakte Übereinstimmung in %) – Anteil der Fälle, in denen der Text exakt identisch war. "
+        f"Wetter-String (exakte Übereinstimmung in %) – Anteil exakt identischer Texte. "
         f"Zeitraum: {frm} bis {to}. Leads: {list_leads_used(leads_ok)}. "
-        f"Datenpunkte (Paare): {n_total}. Quelle: Backend /api/weather/accuracy – Modell: {model}, Stadt: {city}."
+        f"Datenpunkte (Paare): {n_total}. Quelle: Backend /api/weather/accuracy – Modell: {model}, Stadt: {city_lbl}."
     )
 
-def caption_bias(kind: str, df_bias: pd.DataFrame, model: str, city: str, frm: date, to: date):
+def caption_bias(kind: str, df_bias: pd.DataFrame, model: str, city_lbl: str, frm: date, to: date):
     n_total = int(df_bias["n"].fillna(0).sum())
     leads_ok = df_bias.loc[df_bias["n"].fillna(0) > 0, "lead_days"]
     st.caption(
         f"{kind} – Bias = Mittel der Signed Errors (Vorhersage − Beobachtung). "
         f"> 0 = Überschätzung, < 0 = Unterschätzung. Zeitraum: {frm} bis {to}. "
         f"Leads: {list_leads_used(leads_ok)}. Datenpunkte (Paare): {n_total}. "
-        f"Quelle: Backend /api/weather/data (clientseitig berechnet) – Modell: {model}, Stadt: {city}."
+        f"Quelle: Backend /api/weather/data (clientseitig berechnet) – Modell: {model}, Stadt: {city_lbl}."
     )
 
 # ---------------------------------
-# Helper: Bias aus Rohdaten berechnen
+# Helper: Aggregation über Städte
 # ---------------------------------
-def compute_bias_buckets(df: pd.DataFrame, max_lead: int) -> pd.DataFrame:
+def weighted_merge_accuracy(acc_list: List[Dict]) -> pd.DataFrame:
+    """Führt mehrere Accuracy-Bucket-Listen (verschiedener Städte) korrekt gewichtet zusammen."""
+    if not acc_list:
+        return pd.DataFrame()
+    frames = []
+    for acc in acc_list:
+        b = (acc or {}).get("buckets", [])
+        if not b: 
+            continue
+        df = pd.DataFrame(b)
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    df_all = pd.concat(frames, ignore_index=True)
+    # Gruppieren nach Lead und gewichtet mitteln
+    def wavg(series, weights):
+        m = series.notna() & weights.notna() & (weights > 0)
+        return (series[m] * weights[m]).sum() / weights[m].sum() if m.any() else np.nan
+    g = df_all.groupby("lead_days", as_index=False).apply(
+        lambda d: pd.Series({
+            "n": int(d["n"].fillna(0).sum()),
+            "temp_min_mae": wavg(d["temp_min_mae"], d["n"]),
+            "temp_max_mae": wavg(d["temp_max_mae"], d["n"]),
+            "wind_mae":     wavg(d["wind_mae"],     d["n"]),
+            "rain_mae":     wavg(d["rain_mae"],     d["n"]),
+            "weather_match_pct": wavg(d["weather_match_pct"], d["n"]),
+        })
+    ).reset_index(drop=True).sort_values("lead_days")
+    return g
+
+def compute_bias_buckets_grouped(df: pd.DataFrame, max_lead: int) -> pd.DataFrame:
     """
-    Liefert pro Lead (1..max_lead) den Mittelwert der signed errors (Forecast - Observation)
-    für temp_min_c, temp_max_c, wind_mps, rain_mm + n.
+    Bias korrekt über Städte aggregieren:
+    1) je Stadt Observationen joinen, signed errors berechnen,
+    2) je Lead Mittel und n,
+    3) über Städte nach n gewichten.
     """
     if df.empty:
         return pd.DataFrame({"lead_days": [], "n": []})
 
-    # Beobachtungen (Lead 0) je Target-Date
-    obs = df[df["lead_days"] == 0].set_index("target_date")
-
     rows = []
-    for d in range(1, max_lead + 1):
-        fc = df[df["lead_days"] == d].copy()
-        if fc.empty:
-            rows.append({"lead_days": d, "n": 0}); continue
+    for city_name, dcity in df.groupby("city"):
+        obs = dcity[dcity["lead_days"] == 0].set_index("target_date")
+        for d in range(1, max_lead + 1):
+            fc = dcity[dcity["lead_days"] == d].copy()
+            if fc.empty:
+                rows.append({"city": city_name, "lead_days": d, "n": 0}); continue
+            merged = fc.merge(
+                obs[["temp_min_c", "temp_max_c", "wind_mps", "rain_mm", "weather"]],
+                left_on="target_date", right_index=True, suffixes=("", "_obs")
+            )
+            def signed_mean(a, b):
+                mask = a.notna() & b.notna()
+                return float((a[mask] - b[mask]).mean()) if mask.any() else np.nan
+            rows.append({
+                "city": city_name,
+                "lead_days": d,
+                "n": int(len(merged)),
+                "temp_min_bias": signed_mean(merged["temp_min_c"], merged["temp_min_c_obs"]),
+                "temp_max_bias": signed_mean(merged["temp_max_c"], merged["temp_max_c_obs"]),
+                "wind_bias":     signed_mean(merged["wind_mps"], merged["wind_mps_obs"]),
+                "rain_bias":     signed_mean(merged["rain_mm"], merged["rain_mm_obs"]),
+            })
+    df_city = pd.DataFrame(rows)
+    if df_city.empty:
+        return pd.DataFrame({"lead_days": [], "n": []})
 
-        merged = fc.merge(
-            obs[["temp_min_c", "temp_max_c", "wind_mps", "rain_mm", "weather"]],
-            left_on="target_date", right_index=True, suffixes=("", "_obs")
-        )
+    def wavg(series, weights):
+        m = series.notna() & weights.notna() & (weights > 0)
+        return (series[m] * weights[m]).sum() / weights[m].sum() if m.any() else np.nan
 
-        def signed_mean(a, b):
-            mask = a.notna() & b.notna()
-            if not mask.any(): return None
-            return float((a[mask] - b[mask]).mean())
-
-        row = {
-            "lead_days": d,
-            "n": int(len(merged)),
-            "temp_min_bias": signed_mean(merged["temp_min_c"], merged["temp_min_c_obs"]),
-            "temp_max_bias": signed_mean(merged["temp_max_c"], merged["temp_max_c_obs"]),
-            "wind_bias":     signed_mean(merged["wind_mps"], merged["wind_mps_obs"]),
-            "rain_bias":     signed_mean(merged["rain_mm"], merged["rain_mm_obs"]),
-            "weather_match_pct": float(100.0 * (merged["weather"].str.strip().str.lower()
-                                               == merged["weather_obs"].str.strip().str.lower()).mean()) if len(merged) else None
-        }
-        rows.append(row)
-
-    return pd.DataFrame(rows)
+    g = df_city.groupby("lead_days", as_index=False).apply(
+        lambda d: pd.Series({
+            "n": int(d["n"].fillna(0).sum()),
+            "temp_min_bias": wavg(d["temp_min_bias"], d["n"]),
+            "temp_max_bias": wavg(d["temp_max_bias"], d["n"]),
+            "wind_bias":     wavg(d["wind_bias"],     d["n"]),
+            "rain_bias":     wavg(d["rain_bias"],     d["n"]),
+        })
+    ).reset_index(drop=True).sort_values("lead_days")
+    return g
 
 # ---------------------------------
 # Accuracy (MAE)
 # ---------------------------------
 st.subheader("Accuracy (MAE)")
 try:
-    acc = load_accuracy(frm, to, model=model, city=city, max_lead=max_lead)
-    buckets = (acc or {}).get("buckets", [])
-    if buckets:
-        df_acc = pd.DataFrame(buckets).sort_values("lead_days")
+    if city == CITY_ALL_LABEL:
+        acc_list = []
+        for c in KNOWN_CITIES:
+            acc_list.append(load_accuracy(frm, to, model=model, city=c, max_lead=max_lead))
+        df_acc = weighted_merge_accuracy(acc_list)
+        city_label = "ALL"
+    else:
+        acc = load_accuracy(frm, to, model=model, city=city, max_lead=max_lead)
+        df_acc = pd.DataFrame((acc or {}).get("buckets", [])).sort_values("lead_days")
+        city_label = city
+
+    if not df_acc.empty:
         if df_acc["n"].fillna(0).sum() == 0:
             st.info("Noch keine Vergleichspaare (lead ≥ 1 vs. lead = 0) im gewählten Zeitraum.")
 
         c1, c2 = st.columns(2)
         with c1:
             fig_min = px.line(df_acc, x="lead_days", y="temp_min_mae", markers=True,
-                              title=f"Temp MIN MAE (°C) – {model} @ {city}")
+                              title=f"Temp MIN MAE (°C) – {model} @ {city_label}")
             fig_min.update_layout(xaxis_title="Lead (Tage)", yaxis_title="MAE (°C)")
-            st.plotly_chart(fig_min, use_container_width=True)
-            caption_mae("Temp MIN", df_acc, model, city, frm, to)
+            st.plotly_chart(fig_min, width="stretch")
+            caption_mae("Temp MIN", df_acc, model, city_label, frm, to)
 
         with c2:
             fig_max = px.line(df_acc, x="lead_days", y="temp_max_mae", markers=True,
-                              title=f"Temp MAX MAE (°C) – {model} @ {city}")
+                              title=f"Temp MAX MAE (°C) – {model} @ {city_label}")
             fig_max.update_layout(xaxis_title="Lead (Tage)", yaxis_title="MAE (°C)")
-            st.plotly_chart(fig_max, use_container_width=True)
-            caption_mae("Temp MAX", df_acc, model, city, frm, to)
+            st.plotly_chart(fig_max, width="stretch")
+            caption_mae("Temp MAX", df_acc, model, city_label, frm, to)
 
         c3, c4 = st.columns(2)
         with c3:
             fig_w = px.line(df_acc, x="lead_days", y="wind_mae", markers=True,
-                            title=f"Wind MAE (m/s) – {model} @ {city}")
+                            title=f"Wind MAE (m/s) – {model} @ {city_label}")
             fig_w.update_layout(xaxis_title="Lead (Tage)", yaxis_title="MAE (m/s)")
-            st.plotly_chart(fig_w, use_container_width=True)
-            caption_mae("Wind", df_acc, model, city, frm, to)
+            st.plotly_chart(fig_w, width="stretch")
+            caption_mae("Wind", df_acc, model, city_label, frm, to)
 
         with c4:
             fig_r = px.line(df_acc, x="lead_days", y="rain_mae", markers=True,
-                            title=f"Regen MAE (mm) – {model} @ {city}")
+                            title=f"Regen MAE (mm) – {model} @ {city_label}")
             fig_r.update_layout(xaxis_title="Lead (Tage)", yaxis_title="MAE (mm)")
-            st.plotly_chart(fig_r, use_container_width=True)
-            caption_mae("Regen", df_acc, model, city, frm, to)
+            st.plotly_chart(fig_r, width="stretch")
+            caption_mae("Regen", df_acc, model, city_label, frm, to)
 
         fig_m = px.bar(df_acc, x="lead_days", y="weather_match_pct",
-                       title=f"Wetter-String: exakte Treffer (%) – {model} @ {city}")
+                       title=f"Wetter-String: exakte Treffer (%) – {model} @ {city_label}")
         fig_m.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Trefferquote (%)")
-        st.plotly_chart(fig_m, use_container_width=True)
-        caption_weather_string(df_acc, model, city, frm, to)
-
-        with st.expander("Details (Buckets – MAE)"):
-            st.dataframe(df_acc, use_container_width=True, hide_index=True)
-            st.caption(f"Zeitraum: {acc.get('from_date')} bis {acc.get('to_date')} – Modell: {acc.get('model')} – Stadt: {acc.get('city')}")
+        st.plotly_chart(fig_m, width="stretch")
+        caption_weather_string(df_acc, model, city_label, frm, to)
     else:
         st.info("Keine Accuracy-Daten im Zeitraum.")
 except Exception as e:
@@ -239,45 +284,53 @@ st.divider()
 # ---------------------------------
 st.subheader("Bias (signed error: Forecast − Observation)")
 try:
-    rows = load_data_window(days_back, 7, model=model, city=city)
-    df_all = pd.DataFrame(rows)
+    if city == CITY_ALL_LABEL:
+        frames = []
+        for c in KNOWN_CITIES:
+            rows = load_data_window(days_back, 7, model=model, city=c)
+            if rows:
+                frames.append(pd.DataFrame(rows))
+        df_all = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        city_label = "ALL"
+    else:
+        rows = load_data_window(days_back, 7, model=model, city=city)
+        df_all = pd.DataFrame(rows)
+        city_label = city
+
     if df_all.empty:
         st.info("Keine Rohdaten verfügbar.")
     else:
-        df_bias = compute_bias_buckets(df_all, max_lead=max_lead).sort_values("lead_days")
+        df_bias = compute_bias_buckets_grouped(df_all, max_lead=max_lead).sort_values("lead_days")
 
         c1, c2 = st.columns(2)
         with c1:
             fig_bmin = px.line(df_bias, x="lead_days", y="temp_min_bias", markers=True,
-                               title=f"Bias Temp MIN (°C) – {model} @ {city}")
+                               title=f"Bias Temp MIN (°C) – {model} @ {city_label}")
             fig_bmin.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Bias (°C)")
-            st.plotly_chart(fig_bmin, use_container_width=True)
-            caption_bias("Temp MIN", df_bias, model, city, frm, to)
+            st.plotly_chart(fig_bmin, width="stretch")
+            caption_bias("Temp MIN", df_bias, model, city_label, frm, to)
 
         with c2:
             fig_bmax = px.line(df_bias, x="lead_days", y="temp_max_bias", markers=True,
-                               title=f"Bias Temp MAX (°C) – {model} @ {city}")
+                               title=f"Bias Temp MAX (°C) – {model} @ {city_label}")
             fig_bmax.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Bias (°C)")
-            st.plotly_chart(fig_bmax, use_container_width=True)
-            caption_bias("Temp MAX", df_bias, model, city, frm, to)
+            st.plotly_chart(fig_bmax, width="stretch")
+            caption_bias("Temp MAX", df_bias, model, city_label, frm, to)
 
         c3, c4 = st.columns(2)
         with c3:
             fig_bwind = px.line(df_bias, x="lead_days", y="wind_bias", markers=True,
-                                title=f"Bias Wind (m/s) – {model} @ {city}")
+                                title=f"Bias Wind (m/s) – {model} @ {city_label}")
             fig_bwind.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Bias (m/s)")
-            st.plotly_chart(fig_bwind, use_container_width=True)
-            caption_bias("Wind", df_bias, model, city, frm, to)
+            st.plotly_chart(fig_bwind, width="stretch")
+            caption_bias("Wind", df_bias, model, city_label, frm, to)
 
         with c4:
             fig_brain = px.line(df_bias, x="lead_days", y="rain_bias", markers=True,
-                                title=f"Bias Regen (mm) – {model} @ {city}")
+                                title=f"Bias Regen (mm) – {model} @ {city_label}")
             fig_brain.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Bias (mm)")
-            st.plotly_chart(fig_brain, use_container_width=True)
-            caption_bias("Regen", df_bias, model, city, frm, to)
-
-        with st.expander("Details (Buckets – Bias)"):
-            st.dataframe(df_bias, use_container_width=True, hide_index=True)
+            st.plotly_chart(fig_brain, width="stretch")
+            caption_bias("Regen", df_bias, model, city_label, frm, to)
 except Exception as e:
     st.error(f"Fehler beim Berechnen des Bias: {e}")
 
@@ -289,24 +342,25 @@ st.divider()
 st.subheader("Pivot-Tabellen je Variable (Zeilen = Tage, Spalten = Leads −7…0)")
 
 def _lead_to_negcol(lead: int) -> int:
-    return -lead  # Darstellung wie im Screenshot: -7 … -1, 0
+    return -lead  # Darstellung: -7 … -1, 0
 
-def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: tuple[float,float]) -> pd.io.formats.style.Styler:
+def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: tuple[float,float]):
     """
-    Baut eine Pivot-Tabelle je Variable:
-    Index: target_date (aufsteigend)
-    Columns: -7..0 (negativ dargestellte Leads)
-    Values: Vorhersage je Lead, für 0 die Beobachtung.
-    Zellenfärbung (nicht bei Spalte 0): anhand |Forecast - Obs| und thresholds.
+    Für city = Einzelstadt: Index = target_date.
+    Für city = ALL: Index = (city, target_date), damit Beobachtungen nicht gekreuzt werden.
+    Spalten: -7..0 (negativ dargestellte Leads). Zellenfärbung vs. Spalte 0 (Beobachtung).
     """
     if df_all.empty:
-        return pd.DataFrame().style
+        return pd.DataFrame()
 
-    cols = ["target_date", "lead_days", var]
+    cols = ["target_date", "lead_days", var, "city"]
     df = df_all[cols].copy()
     df["neg_lead"] = df["lead_days"].apply(_lead_to_negcol)
 
-    pv = df.pivot_table(index="target_date", columns="neg_lead", values=var, aggfunc="first").sort_index()
+    index_cols = ["target_date"] if df["city"].nunique() == 1 else ["city", "target_date"]
+    pv = df.pivot_table(index=index_cols, columns="neg_lead", values=var, aggfunc="first").sort_index()
+
+    # alle Spalten sicher anlegen
     for col in range(-7, 1):
         if col not in pv.columns:
             pv[col] = np.nan
@@ -319,43 +373,72 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: tuple[float,float])
         pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
 
     thr_g, thr_o = thresholds
-    def colorize(val, err):
-        if pd.isna(val) or pd.isna(err): return ""
+    def colorize(err):
+        if pd.isna(err): return ""
         if err <= thr_g: return "background-color: #e6f4ea"   # grün
         if err <= thr_o: return "background-color: #fff4e5"   # orange
         return "background-color: #fde8e8"                    # rot
 
-    styles = pv.copy()
-    for r in pv.index:
-        for c in pv.columns:
-            styles.loc[r, c] = colorize(pv.loc[r, c], pv_err.loc[r, c])
+    # Build a Styler by applying per-cell styles
+    styled = pv.copy()
+    for c in pv.columns:
+        if c == 0:
+            styled[c] = ""  # Beobachtung nicht färben
+        else:
+            styled[c] = pv_err[c].apply(colorize)
 
-    pv_with_date = pv.copy()
-    pv_with_date.insert(0, "date", pv_with_date.index.astype(str))
-    styled = pv_with_date.style.format(precision=2).apply(lambda _: styles, axis=None)
-    return styled
+    # für Anzeige: Indexspalten als echte Spalten ausgeben
+    pv_show = pv.copy()
+    if isinstance(pv_show.index, pd.MultiIndex):
+        pv_show.insert(0, "city", [idx[0] for idx in pv_show.index])
+        pv_show.insert(1, "date", [str(idx[1]) for idx in pv_show.index])
+    else:
+        pv_show.insert(0, "date", pv_show.index.astype(str))
+
+    styler = pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
+    return styler
 
 try:
-    rows = load_data_window(days_back, 7, model=model, city=city)
-    dfr = pd.DataFrame(rows)
+    if city == CITY_ALL_LABEL:
+        frames = []
+        for c in KNOWN_CITIES:
+            rows = load_data_window(days_back, 7, model=model, city=c)
+            if rows:
+                frames.append(pd.DataFrame(rows))
+        dfr = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        city_label = "ALL"
+    else:
+        rows = load_data_window(days_back, 7, model=model, city=city)
+        dfr = pd.DataFrame(rows)
+        city_label = city
+
     if dfr.empty:
         st.info("Keine Daten im aktuellen Fenster.")
     else:
-        dfr = dfr.sort_values(["target_date", "lead_days"], ascending=[True, False])
+        dfr = dfr.sort_values(["city", "target_date", "lead_days"], ascending=[True, True, False])
 
         for var in NUM_VARS.keys():
-            st.markdown(f"**{NUM_VARS[var]['title']}**")
+            st.markdown(f"**{NUM_VARS[var]['title']} – {model} @ {city_label}**")
             styler = _build_pivot(dfr, var, thresholds[var])
-            st.dataframe(styler, use_container_width=True)
-        st.markdown("**Aussichten (Wetter-String)**")
-        dfw = dfr[["target_date", "lead_days", "weather"]].copy()
+            if isinstance(styler, pd.io.formats.style.Styler) or hasattr(styler, "to_html"):
+                st.dataframe(styler, width="stretch")
+            else:
+                st.dataframe(styler, width="stretch")
+
+        st.markdown(f"**Aussichten (Wetter-String) – {model} @ {city_label}**")
+        dfw = dfr[["target_date", "lead_days", "weather", "city"]].copy()
         dfw["neg_lead"] = dfw["lead_days"].apply(_lead_to_negcol)
-        pvw = dfw.pivot_table(index="target_date", columns="neg_lead", values="weather", aggfunc="first").sort_index()
+        index_cols = ["target_date"] if dfw["city"].nunique() == 1 else ["city", "target_date"]
+        pvw = dfw.pivot_table(index=index_cols, columns="neg_lead", values="weather", aggfunc="first").sort_index()
         for col in range(-7, 1):
             if col not in pvw.columns: pvw[col] = np.nan
         pvw = pvw[sorted(pvw.columns)]
-        pvw.insert(0, "date", pvw.index.astype(str))
-        st.dataframe(pvw, use_container_width=True)
+        if isinstance(pvw.index, pd.MultiIndex):
+            pvw.insert(0, "city", [idx[0] for idx in pvw.index])
+            pvw.insert(1, "date", [str(idx[1]) for idx in pvw.index])
+        else:
+            pvw.insert(0, "date", pvw.index.astype(str))
+        st.dataframe(pvw, width="stretch")
 except Exception as e:
     st.error(f"Fehler beim Erstellen der Tabellen: {e}")
 
@@ -365,11 +448,20 @@ except Exception as e:
 st.divider()
 with st.expander("Rohdaten (zur Kontrolle)"):
     try:
-        rows = load_data_window(days_back, 7, model=model, city=city)
-        dfr = pd.DataFrame(rows)
+        if city == CITY_ALL_LABEL:
+            frames = []
+            for c in KNOWN_CITIES:
+                rows = load_data_window(days_back, 7, model=model, city=c)
+                if rows:
+                    frames.append(pd.DataFrame(rows))
+            dfr = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        else:
+            rows = load_data_window(days_back, 7, model=model, city=city)
+            dfr = pd.DataFrame(rows)
+
         if not dfr.empty:
-            dfr = dfr.sort_values(["target_date", "lead_days"], ascending=[True, False])
-            st.dataframe(dfr, use_container_width=True, hide_index=True)
+            dfr = dfr.sort_values(["city", "target_date", "lead_days"], ascending=[True, True, False])
+            st.dataframe(dfr, width="stretch", hide_index=True)
             st.caption(f"{len(dfr)} Zeilen")
         else:
             st.info("Keine Daten im aktuellen Fenster. Prüfe Modell/Stadt oder Zeitfenster.")
@@ -402,7 +494,7 @@ if st.session_state.show_weather_logs:
         dfl = pd.DataFrame(logs)
         if not dfl.empty:
             dfl["timestamp"] = pd.to_datetime(dfl["timestamp"], utc=True, errors="coerce")
-            st.dataframe(dfl, use_container_width=True, hide_index=True)
+            st.dataframe(dfl, width="stretch", hide_index=True)
             st.caption(f"{len(dfl)} Log-Einträge geladen.")
         else:
             st.info("Keine Logs vorhanden.")
