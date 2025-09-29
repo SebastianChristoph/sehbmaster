@@ -237,7 +237,7 @@ try:
         # Category to English (display)
         if "category" in df.columns:
             df["category_en"] = df["category"].map(translate_category)
-            # put English first for display, keep original as fallback column at the end
+            df.drop(columns=["category"], inplace=True)
             df.rename(columns={"category_en": "category"}, inplace=True)
 
         want = [
