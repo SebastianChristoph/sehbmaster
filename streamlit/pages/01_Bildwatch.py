@@ -24,11 +24,11 @@ st.set_page_config(page_title="sehbmaster – Bildwatch", page_icon="📰", layo
 st.title("📰 Bildwatch")
 st.caption("Overview & metrics. Times in Europe/Berlin.")
 
-# Map German → English category names (extend as needed)
 CATEGORY_MAP = {
-    # Common BILD sections (examples; adjust to your real data)
     "Politik": "Politics",
+    "politik": "Politics",
     "Sport": "Sports",
+    "sport": "Sports",
     "Fußball": "Football",
     "Bundesliga": "Bundesliga",
     "Wirtschaft": "Business",
@@ -37,9 +37,11 @@ CATEGORY_MAP = {
     "Panorama": "General",
     "Blaulicht": "Crime",
     "Wissen": "Science",
+    "leben-wissen": "Life & Knowledge",
     "Technik": "Tech",
     "Digital": "Tech",
     "Unterhaltung": "Entertainment",
+    "unterhaltung": "Entertainment",
     "VIP": "Celebrities",
     "Kultur": "Culture",
     "Reise": "Travel",
@@ -51,10 +53,13 @@ CATEGORY_MAP = {
     "Meinung": "Opinion",
     "International": "World",
     "Region": "Local",
+    "regional": "Local",
     "Berlin": "Berlin",
     "Hamburg": "Hamburg",
-    # Fallbacks are handled automatically
+    "news": "News",
+    "Unbekannt": "Unknown",
 }
+
 
 def translate_category(cat: str) -> str:
     if not isinstance(cat, str):
