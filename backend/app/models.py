@@ -21,12 +21,9 @@ class DummyTable(Base):
 
     message: Mapped[str] = mapped_column(Text, primary_key=True)
 
-
 class BildWatch(Base):
     __tablename__ = "bildwatch"
-    __table_args__ = (
-        {"schema": "bild"},
-    )
+    __table_args__ = ({"schema": "bild"},)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
@@ -36,8 +33,7 @@ class BildWatch(Base):
     converted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     published: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     converted_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    converted_duration_hours: Mapped[float | None] = mapped_column(Float,nullable=True,
-    )
+    converted_duration_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 class BildWatchMetrics(Base):
     __tablename__ = "bildwatch_metrics"
@@ -47,35 +43,24 @@ class BildWatchMetrics(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-
-    # stündlicher Bucket (z. B. 2025-09-16 09:00:00+00)
     ts_hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-    # Snapshot: aktueller Stand dieser Stunde
     snapshot_total: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot_premium: Mapped[int] = mapped_column(Integer, nullable=False)
     snapshot_premium_pct: Mapped[float] = mapped_column(Float, nullable=False)
-
-    # Zuwachs innerhalb der Stunde (aufsummiert)
     new_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     new_premium_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
-
 
 class BildLog(Base):
     __tablename__ = "log"
     __table_args__ = ({"schema": "bild"},)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-
-    # Zeitzone-aware; in der DB default NOW()
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP")
     )
-
     message: Mapped[str] = mapped_column(Text, nullable=False)
