@@ -285,7 +285,7 @@ def delete_all_logs(_=Depends(require_api_key)):
 
 
 
-@router.get("/corrections", response_model=list[BildCorrectionOut])  # <-- Pfad fix
+@router.get("/corrections", response_model=list[BildCorrectionOut])
 def list_corrections(session: Session = Depends(get_db_session)):
     rows = (
         session.execute(
@@ -301,12 +301,13 @@ def list_corrections(session: Session = Depends(get_db_session)):
             published=r.published,
             source_url=r.source_url,
             article_url=r.article_url,
+            created_at=r.created_at,   # <- wichtig
         )
         for r in rows
     ]
 
-# --- Corrections: POST ---
-@router.post("/corrections", response_model=BildCorrectionOut, status_code=201)  # <-- Pfad fix
+
+@router.post("/corrections", response_model=BildCorrectionOut, status_code=201)
 def create_correction(payload: BildCorrectionIn, session: Session = Depends(get_db_session)):
     row = BildCorrection(
         id=payload.id,
@@ -322,6 +323,7 @@ def create_correction(payload: BildCorrectionIn, session: Session = Depends(get_
         from sqlalchemy.exc import IntegrityError
         session.rollback()
         if isinstance(e, IntegrityError):
+            # schon vorhanden
             raise HTTPException(status_code=409, detail="duplicate")
         raise
     session.refresh(row)
@@ -331,4 +333,5 @@ def create_correction(payload: BildCorrectionIn, session: Session = Depends(get_
         published=row.published,
         source_url=row.source_url,
         article_url=row.article_url,
+        created_at=row.created_at,   # <- wichtig
     )
