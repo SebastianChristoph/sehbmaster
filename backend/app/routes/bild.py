@@ -335,3 +335,10 @@ def create_correction(payload: BildCorrectionIn, session: Session = Depends(get_
         article_url=row.article_url,
         created_at=row.created_at,   # <- wichtig
     )
+
+@router.delete("/corrections", status_code=204, dependencies=[Depends(require_api_key)])
+def delete_all_corrections(session: Session = Depends(get_db_session)) -> None:
+    """Löscht alle Bild-Corrections."""
+    session.execute(delete(BildCorrection))
+    session.commit()
+    return
