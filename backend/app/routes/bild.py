@@ -11,17 +11,19 @@ from typing import List, Dict, Optional
 import os
 
 from ..db import get_session
-from ..models import BildWatch, BildWatchMetrics, BildLog
+from ..models import BildWatch, BildWatchMetrics, BildLog, BildCorrection
 from ..schemas import (
     BildWatchIn, BildWatchOut,
     BildWatchMetricsIn, BildWatchMetricsOut,
-    BildLogIn, BildLogOut,
+    BildLogIn, BildLogOut, BildCorrectionIn, BildCorrectionOut
 )
 from ..services.bild_charts import (
     compute_category_counts,
     compute_hourly_charts,
     compute_daily_conversions,
 )
+from sqlalchemy.exc import IntegrityError
+
 
 router = APIRouter(prefix="/api/bild", tags=["bild"])
 
@@ -280,3 +282,23 @@ def delete_all_logs(_=Depends(require_api_key)):
         s.execute(text('TRUNCATE TABLE "bild"."log";'))
         s.commit()
     return
+
+
+
+@router.get("/corrections", response_model=list[BildCorrectionOut])
+def list_corrections(session = Depends(get_session)):
+    return (
+        session.execute(select(BildCorrection).order_by(BildCorrection.published.desc()))
+        .scalars().all()
+    )
+
+@router.post("/corrections", response_model=BildCorrectionOut, status_code=201)
+def create_correction(payload: BildCorrectionIn, session = Depends(get_session)):
+    row = BildCorrection(**payload.dict())
+    session.add(row)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="duplicate")
+    return row

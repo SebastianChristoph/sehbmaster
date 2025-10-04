@@ -56,3 +56,14 @@ class BildLogOut(BaseModel):
     id: int
     timestamp: datetime
     message: str
+
+# ---- Bild Corrections (Live-Ticker) ----
+class BildCorrectionIn(BaseModel):
+    id: str
+    title: str
+    published: datetime
+    source_url: str
+    article_url: str | None = None
+
+class BildCorrectionOut(BildCorrectionIn):
+    created_at: datetime

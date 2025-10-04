@@ -64,3 +64,21 @@ class BildLog(Base):
         server_default=text("CURRENT_TIMESTAMP")
     )
     message: Mapped[str] = mapped_column(Text, nullable=False)
+
+class BildCorrection(Base):
+    __tablename__ = "corrections"
+    __table_args__ = (
+        UniqueConstraint("source_url", "published", "title", name="uq_bild_corrections_unique"),
+        {"schema": "bild"},
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    published: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    article_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
