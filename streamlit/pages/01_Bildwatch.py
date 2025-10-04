@@ -202,7 +202,9 @@ try:
             st.info("No category data available.")
 
        
-     
+        # Corrections per day (absolute) + Averages
+        # -----------------------------
+        # -----------------------------
         # Corrections per day (absolute) + Averages  (robust)
         # -----------------------------
         st.subheader("Corrections per day (Europe/Berlin)")
@@ -290,8 +292,8 @@ try:
                     )
         except Exception as e:
             st.error(f"Error while loading corrections: {e}")
-
-
+except Exception as e:
+    st.error(f"Error while loading corrections: {e}")
 st.divider()
 
 # ===================================================
