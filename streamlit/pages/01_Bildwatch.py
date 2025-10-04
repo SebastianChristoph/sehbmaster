@@ -201,61 +201,60 @@ try:
         else:
             st.info("No category data available.")
 
-        # ----- Average corrections per hour (0–23, Europe/Berlin) -----
-        st.subheader("Average corrections per hour (Europe/Berlin)")
+       
+        # Corrections per day (absolute) + Averages
+        # -----------------------------
+        st.subheader("Corrections per day (Europe/Berlin)")
 
-        # Prepare hour + local date
-        dfc["published_local"] = dfc["published"]
-        dfc["hour"] = dfc["published_local"].dt.hour
-        dfc["date_local"] = dfc["published_local"].dt.date
+        if "dfc" in locals() and not dfc.empty:
+            # Wähle, welche Zeitbasis für Tag/Stunde gilt
+            basis = st.radio(
+                "Basis for day/hour calculation",
+                ["Published (UTC → Europe/Berlin)", "Ingested (created_at, UTC → Europe/Berlin)"],
+                horizontal=True,
+                index=0,
+                key="corrections_daily_basis",
+            )
+            use_col = "published_local" if basis.startswith("Published") else "ingested_local"
 
-        if dfc["published_local"].notna().any():
-            # Count per (date, hour)
-            counts = (
-                dfc.groupby(["date_local", "hour"])
-                .size()
-                .unstack(fill_value=0)
+            tmp = dfc[[use_col, "id"]].copy()
+            tmp["day"] = tmp[use_col].dt.date  # lokales Datum (Europe/Berlin)
+
+            # Absolute Anzahl pro Tag
+            counts_day = (
+                tmp.groupby("day", as_index=False)["id"]
+                .count()
+                .rename(columns={"id": "count"})
+                .sort_values("day")
             )
 
-            # Make sure we include every day in range and every hour 0..23 (0 if no corrections)
-            if not counts.empty:
-                day_index = pd.date_range(
-                    start=pd.to_datetime(min(dfc["date_local"])),
-                    end=pd.to_datetime(max(dfc["date_local"])),
-                    freq="D",
-                ).date
-                counts = counts.reindex(index=day_index, fill_value=0)
-                counts = counts.reindex(columns=list(range(24)), fill_value=0)
+            fig_day = px.bar(
+                counts_day,
+                x="day",
+                y="count",
+                title="Corrections per day (absolute)",
+                labels={"day": "Day", "count": "Corrections"},
+            )
+            # Kategorie-Achse, damit nur vorhandene Tage gezeigt werden
+            fig_day.update_xaxes(type="category")
+            st.plotly_chart(fig_day, use_container_width=True)
 
-                # average per hour over days
-                avg_per_hour = counts.mean(axis=0)
+            # Kennzahlen
+            n_days = tmp["day"].nunique()
+            total = len(tmp)
+            avg_per_day = (total / n_days) if n_days else 0.0
+            avg_per_hour_overall = (total / (n_days * 24)) if n_days else 0.0
 
-                # saubere Index-/Spaltennamen + kompatibel mit älteren pandas
-                avg_per_hour.index = avg_per_hour.index.astype(int)  # 0..23 sicherstellen
-                df_avg = (
-                    avg_per_hour
-                    .rename_axis("hour")              # Indexname setzen
-                    .reset_index(name="avg_corrections")  # Spaltenname setzen
-                    .sort_values("hour")
-                )
+            c1, c2 = st.columns(2)
+            c1.metric("Ø corrections per day", f"{avg_per_day:.2f}")
+            c2.metric("Ø corrections per hour (overall)", f"{avg_per_hour_overall:.3f}")
 
-                fig_hour = px.bar(
-                    df_avg,
-                    x="hour",
-                    y="avg_corrections",
-                    title="Average corrections per hour (0–23)",
-                    labels={"hour": "Hour", "avg_corrections": "Avg. corrections/hour"},
-                )
-                fig_hour.update_layout(xaxis=dict(tickmode="linear", dtick=1))
-                st.plotly_chart(fig_hour, use_container_width=True)
-
-                st.caption(
-                    f"Based on {len(counts.index)} day(s) from {min(counts.index)} to {max(counts.index)}."
-                )
-            else:
-                st.info("Not enough data to compute hourly averages.")
+            day_min = str(min(tmp["day"])) if n_days else "-"
+            day_max = str(max(tmp["day"])) if n_days else "-"
+            st.caption(f"Based on {n_days} day(s) from {day_min} to {day_max}. Total corrections: {total}.")
         else:
-            st.info("No valid timestamps to compute hourly averages.")
+            st.info("No corrections available yet.")
+
 
     else:
         st.info("No corrections found.")
