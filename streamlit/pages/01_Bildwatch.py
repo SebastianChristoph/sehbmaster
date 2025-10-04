@@ -227,10 +227,15 @@ try:
                 counts = counts.reindex(index=day_index, fill_value=0)
                 counts = counts.reindex(columns=list(range(24)), fill_value=0)
 
-                avg_per_hour = counts.mean(axis=0)  # average per hour over days
+                # average per hour over days
+                avg_per_hour = counts.mean(axis=0)
+
+                # saubere Index-/Spaltennamen + kompatibel mit älteren pandas
+                avg_per_hour.index = avg_per_hour.index.astype(int)  # 0..23 sicherstellen
                 df_avg = (
-                    avg_per_hour.rename("avg_corrections")
-                    .reset_index(names="hour")
+                    avg_per_hour
+                    .rename_axis("hour")              # Indexname setzen
+                    .reset_index(name="avg_corrections")  # Spaltenname setzen
                     .sort_values("hour")
                 )
 
