@@ -133,9 +133,8 @@ try:
         for col in ("published", "created_at"):
             dfc[col] = pd.to_datetime(dfc[col], utc=True, errors="coerce").dt.tz_convert(TZ)
 
-        # Try to infer category from article_url path after domain
+        # Infer category from first path segment of article_url
         def infer_cat(url: str) -> str | None:
-            # e.g. https://www.bild.de/unterhaltung/... -> "unterhaltung"
             try:
                 if not isinstance(url, str):
                     return None
@@ -182,7 +181,6 @@ try:
             .sort_values("Category")
         )
         if not cat_counts.empty:
-            # Build stable color map over categories
             all_cats = cat_counts["Category"].tolist()
             palette = px.colors.qualitative.D3
             color_map = {c: palette[i % len(palette)] for i, c in enumerate(all_cats)}
@@ -201,16 +199,10 @@ try:
         else:
             st.info("No category data available.")
 
-       
-        # Corrections per day (absolute) + Averages
-        # -----------------------------
-        # -----------------------------
-        # Corrections per day (absolute) + Averages  (robust)
-        # -----------------------------
+        # ----- Corrections per day (absolute) + Averages (robust) -----
         st.subheader("Corrections per day (Europe/Berlin)")
 
         def _ensure_local_time_cols(df: pd.DataFrame) -> pd.DataFrame:
-            """Sorgt dafür, dass published_local / ingested_local vorhanden sind."""
             out = df.copy()
             if "published_local" not in out.columns:
                 out["published_local"] = pd.to_datetime(
@@ -223,77 +215,78 @@ try:
             return out
 
         try:
-            if "dfc" not in locals() or dfc is None or dfc.empty:
-                st.info("No corrections available yet.")
+            dfc = _ensure_local_time_cols(dfc)
+
+            basis = st.radio(
+                "Basis for day/hour calculation",
+                ["Published (UTC → Europe/Berlin)", "Ingested (created_at, UTC → Europe/Berlin)"],
+                horizontal=True,
+                index=0,
+                key="corrections_daily_basis",
+            )
+            use_col = "published_local" if basis.startswith("Published") else "ingested_local"
+
+            tmp = dfc[[use_col, "id"]].dropna(subset=[use_col]).copy()
+            if tmp.empty:
+                st.info("No timestamps available for this basis.")
             else:
-                dfc = _ensure_local_time_cols(dfc)
+                # lokales Datum
+                tmp["day"] = tmp[use_col].dt.date
 
-                basis = st.radio(
-                    "Basis for day/hour calculation",
-                    ["Published (UTC → Europe/Berlin)", "Ingested (created_at, UTC → Europe/Berlin)"],
-                    horizontal=True,
-                    index=0,
-                    key="corrections_daily_basis",
+                # pro Tag zählen
+                counts = (
+                    tmp.groupby("day", as_index=False)["id"]
+                    .count()
+                    .rename(columns={"id": "count"})
                 )
-                use_col = "published_local" if basis.startswith("Published") else "ingested_local"
 
-                tmp = dfc[[use_col, "id"]].dropna(subset=[use_col]).copy()
-                if tmp.empty:
-                    st.info("No timestamps available for this basis.")
-                else:
-                    # lokales Datum
-                    tmp["day"] = tmp[use_col].dt.date
+                # lückenlose Tagesachse (Tage ohne Korrekturen = 0)
+                day_min = pd.to_datetime(min(tmp["day"]))
+                day_max = pd.to_datetime(max(tmp["day"]))
+                all_days = pd.date_range(day_min, day_max, freq="D")
 
-                    # Zählt pro Tag
-                    counts = (
-                        tmp.groupby("day", as_index=False)["id"]
-                        .count()
-                        .rename(columns={"id": "count"})
-                    )
+                counts["day"] = pd.to_datetime(counts["day"])
+                counts_full = (
+                    pd.DataFrame({"day": all_days})
+                    .merge(counts, on="day", how="left")
+                    .fillna({"count": 0})
+                )
+                counts_full["count"] = counts_full["count"].astype(int)
+                counts_full["day"] = counts_full["day"].dt.date
 
-                    # Achse lückenlos machen (Tage ohne Korrekturen = 0)
-                    day_min = pd.to_datetime(min(tmp["day"]))
-                    day_max = pd.to_datetime(max(tmp["day"]))
-                    all_days = pd.date_range(day_min, day_max, freq="D")
+                # Plot
+                fig_day = px.bar(
+                    counts_full,
+                    x="day",
+                    y="count",
+                    title="Corrections per day (absolute)",
+                    labels={"day": "Day", "count": "Corrections"},
+                )
+                fig_day.update_xaxes(type="category")
+                st.plotly_chart(fig_day, use_container_width=True)
 
-                    counts_full = (
-                        counts.set_index(pd.to_datetime(counts["day"]))
-                        .reindex(all_days, fill_value=0)
-                        .rename_axis("day")
-                        .reset_index()
-                    )
-                    counts_full["day"] = counts_full["day"].dt.date
-                    counts_full = counts_full[["day", "count"]]
+                # Kennzahlen (Ø pro Tag / Ø pro Stunde über gesamten Zeitraum)
+                total = int(tmp.shape[0])
+                n_days = len(all_days)  # inkl. 0-Tage
+                avg_per_day = total / n_days if n_days else 0.0
+                avg_per_hour_overall = total / (n_days * 24) if n_days else 0.0
 
-                    # Plot
-                    fig_day = px.bar(
-                        counts_full,
-                        x="day",
-                        y="count",
-                        title="Corrections per day (absolute)",
-                        labels={"day": "Day", "count": "Corrections"},
-                    )
-                    fig_day.update_xaxes(type="category")
-                    st.plotly_chart(fig_day, use_container_width=True)
+                k1, k2 = st.columns(2)
+                k1.metric("Ø corrections per day", f"{avg_per_day:.2f}")
+                k2.metric("Ø corrections per hour (overall)", f"{avg_per_hour_overall:.3f}")
 
-                    # Kennzahlen
-                    total = int(tmp.shape[0])
-                    n_days = len(all_days)  # inkl. Tage ohne Korrekturen
-                    avg_per_day = total / n_days if n_days else 0.0
-                    avg_per_hour_overall = total / (n_days * 24) if n_days else 0.0
-
-                    c1, c2 = st.columns(2)
-                    c1.metric("Ø corrections per day", f"{avg_per_day:.2f}")
-                    c2.metric("Ø corrections per hour (overall)", f"{avg_per_hour_overall:.3f}")
-
-                    st.caption(
-                        f"Based on {n_days} day(s) from {all_days.min().date()} to {all_days.max().date()}. "
-                        f"Total corrections: {total}."
-                    )
+                st.caption(
+                    f"Based on {n_days} day(s) from {all_days.min().date()} to {all_days.max().date()}. "
+                    f"Total corrections: {total}."
+                )
         except Exception as e:
             st.error(f"Error while loading corrections: {e}")
+
+    else:
+        st.info("No corrections available.")
 except Exception as e:
     st.error(f"Error while loading corrections: {e}")
+
 st.divider()
 
 # ===================================================
@@ -407,9 +400,9 @@ st.subheader("Premium → free per day (Europe/Berlin)")
 try:
     conv = load_daily_conversions(days=60)  # [{"day":"YYYY-MM-DD","count":N}, ...]
     if conv:
-        dfc = pd.DataFrame(conv).sort_values("day")
+        dfconv = pd.DataFrame(conv).sort_values("day")
         fig_conv = px.bar(
-            dfc, x="day", y="count",
+            dfconv, x="day", y="count",
             title="Premium → free switches per day",
             labels={"day": "Day", "count": "Switches"},
         )
@@ -421,7 +414,7 @@ except Exception as e:
     st.error(f"Error while evaluating conversions: {e}")
 
 # ===================================================
-# Articles table
+# All articles table
 # ===================================================
 st.subheader("All articles (newest first)")
 try:
