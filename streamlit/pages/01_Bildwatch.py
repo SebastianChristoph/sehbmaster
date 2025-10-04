@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 
 from api_client import (
@@ -13,6 +14,8 @@ from api_client import (
     get_bild_daily_conversions,
     get_bild_logs,
     delete_bild_logs,
+    get_bild_corrections,        # <- NEU
+    delete_bild_corrections,     # <- NEU
 )
 
 TZ = ZoneInfo("Europe/Berlin")
@@ -60,7 +63,6 @@ CATEGORY_MAP = {
     "Unbekannt": "Unknown",
 }
 
-
 def translate_category(cat: str) -> str:
     if not isinstance(cat, str):
         return cat
@@ -69,8 +71,26 @@ def translate_category(cat: str) -> str:
 def translate_cat_counts(d: dict) -> dict:
     return {translate_category(k): v for k, v in (d or {}).items()}
 
+def extract_bild_category(url: str) -> str | None:
+    """
+    Holt den ersten Path-Slug hinter bild.de/, z.B.
+      https://www.bild.de/unterhaltung/stars... -> 'unterhaltung'
+      https://bild.de/sport/mehr-sport/...      -> 'sport'
+    Fällt zurück auf 'Unknown', wenn nichts passt.
+    """
+    if not isinstance(url, str) or not url:
+        return "Unknown"
+    try:
+        p = urlparse(url)
+        # path beginnt mit /foo/bar... -> nimm erstes Segment
+        segment = (p.path or "/").strip("/").split("/")[0] or "Unknown"
+        # manche Artikel haben volle Domain ohne www., egal – wir nehmen nur das Segment
+        return segment.lower() if segment else "Unknown"
+    except Exception:
+        return "Unknown"
+
 # -----------------------------
-# Caches / Loader (unchanged)
+# Caches / Loader
 # -----------------------------
 @st.cache_data(ttl=15)
 def load_category_counts(premium_only: bool = False):
@@ -88,16 +108,21 @@ def load_daily_conversions(days: int = 60):
 def load_articles(limit: int = 20000, offset: int = 0):
     return get_bild_articles(limit=limit, offset=offset)
 
+@st.cache_data(ttl=15)
+def load_corrections():
+    return get_bild_corrections()
+
 # Reload button
 if st.button("🔄 Reload"):
     load_category_counts.clear()
     load_hourly.clear()
     load_daily_conversions.clear()
     load_articles.clear()
+    load_corrections.clear()
     st.rerun()
 
 # -----------------------------
-# a) Category pies (all) + premium, side by side, consistent colors
+# a) Category pies (all) + premium
 # -----------------------------
 st.subheader("Category distribution")
 
@@ -161,7 +186,7 @@ with col2:
         st.error(f"Error when creating the premium pie chart: {e}")
 
 # -----------------------------
-# b) & c) Hourly charts (local time) – backend-calculated
+# b) & c) Hourly charts – backend-calculated
 # -----------------------------
 try:
     hourly = load_hourly(days=60)  # {"snapshot_avg": [...], "new_avg": [...]}
@@ -207,9 +232,9 @@ st.subheader("Premium → free per day (Europe/Berlin)")
 try:
     conv = load_daily_conversions(days=60)  # [{"day":"YYYY-MM-DD","count":N}, ...]
     if conv:
-        dfc = pd.DataFrame(conv).sort_values("day")
+        df_conv = pd.DataFrame(conv).sort_values("day")
         fig_conv = px.bar(
-            dfc, x="day", y="count",
+            df_conv, x="day", y="count",
             title="Premium → free switches per day",
             labels={"day": "Day", "count": "Switches"},
         )
@@ -267,6 +292,95 @@ try:
         st.info("No articles available.")
 except Exception as e:
     st.error(f"Error while loading articles: {e}")
+
+# -----------------------------
+# Corrections (neu)
+# -----------------------------
+st.divider()
+st.subheader("Bild corrections")
+
+c1, c2 = st.columns([1, 1])
+with c1:
+    if st.button("🔄 Reload corrections"):
+        load_corrections.clear()
+        st.rerun()
+with c2:
+    if st.button("🗑️ Delete ALL corrections"):
+        try:
+            delete_bild_corrections()
+            load_corrections.clear()
+            st.success("All corrections deleted.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Delete failed: {e}")
+
+try:
+    corr = load_corrections() or []
+    if not corr:
+        st.info("No corrections yet.")
+    else:
+        dfc = pd.DataFrame(corr)
+
+        # Timestamps → Europe/Berlin
+        for col in ("published", "created_at"):
+            if col in dfc.columns:
+                dfc[col] = pd.to_datetime(dfc[col], utc=True, errors="coerce").dt.tz_convert(TZ)
+
+        # Kategorie aus article_url extrahieren und in EN übertragen
+        dfc["corr_category_raw"] = dfc["article_url"].map(extract_bild_category)
+        dfc["corr_category"] = dfc["corr_category_raw"].map(translate_category)
+
+        # Tabelle
+        table_cols = ["published", "created_at", "corr_category", "title", "article_url", "source_url", "id"]
+        cols = [c for c in table_cols if c in dfc.columns] + [c for c in dfc.columns if c not in table_cols]
+        st.dataframe(
+            dfc[cols].sort_values(["published", "created_at"], ascending=[False, False]),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "published": st.column_config.DatetimeColumn("Published"),
+                "created_at": st.column_config.DatetimeColumn("Ingested"),
+                "article_url": st.column_config.LinkColumn("Article URL"),
+                "source_url": st.column_config.LinkColumn("Source URL"),
+                "corr_category": st.column_config.TextColumn("Category") if hasattr(st.column_config, "TextColumn") else None,
+                "title": st.column_config.TextColumn("Title") if hasattr(st.column_config, "TextColumn") else None,
+            },
+        )
+        st.caption(f"{len(dfc)} corrections loaded.")
+
+        # ---- Pie: "In welchen Kategorien wurde wie oft korrigiert?"
+        st.subheader("Corrections by category")
+        counts = (
+            dfc.groupby("corr_category", dropna=False)["id"]
+               .count()
+               .reset_index()
+               .rename(columns={"id": "count"})
+               .sort_values("count", ascending=False)
+        )
+
+        # Farbe konsistent mit den Artikel-Charts, ggf. Categories ergänzen
+        existing = set(color_map.keys())
+        extra_cats = [c for c in counts["corr_category"].tolist() if c not in existing]
+        if extra_cats:
+            palette = px.colors.qualitative.D3
+            start_idx = len(color_map)
+            for i, cat in enumerate(extra_cats, start=start_idx):
+                color_map[cat] = palette[i % len(palette)]
+
+        fig_corr_pie = px.pie(
+            counts,
+            names="corr_category",
+            values="count",
+            title="Corrections per category",
+            hole=0.3,
+            color="corr_category",
+            color_discrete_map=color_map,
+        )
+        fig_corr_pie.update_traces(textinfo="percent+label", textposition="inside", showlegend=False)
+        st.plotly_chart(fig_corr_pie, use_container_width=True)
+
+except Exception as e:
+    st.error(f"Error while loading corrections: {e}")
 
 # -----------------------------
 # LOGS (lazy load)
