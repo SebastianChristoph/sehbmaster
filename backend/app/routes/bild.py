@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 from typing import List, Dict, Optional
 import os
 
-from ..db import get_session
 from ..models import BildWatch, BildWatchMetrics, BildLog, BildCorrection
 from ..schemas import (
     BildWatchIn, BildWatchOut,
@@ -23,7 +22,8 @@ from ..services.bild_charts import (
     compute_daily_conversions,
 )
 from sqlalchemy.exc import IntegrityError
-
+from sqlalchemy.orm import Session
+from ..db import get_session, get_db_session 
 
 router = APIRouter(prefix="/api/bild", tags=["bild"])
 
@@ -285,20 +285,50 @@ def delete_all_logs(_=Depends(require_api_key)):
 
 
 
-@router.get("/corrections", response_model=list[BildCorrectionOut])
-def list_corrections(session = Depends(get_session)):
-    return (
-        session.execute(select(BildCorrection).order_by(BildCorrection.published.desc()))
-        .scalars().all()
+@router.get("/corrections", response_model=list[BildCorrectionOut])  # <-- Pfad fix
+def list_corrections(session: Session = Depends(get_db_session)):
+    rows = (
+        session.execute(
+            select(BildCorrection).order_by(BildCorrection.published.desc())
+        )
+        .scalars()
+        .all()
     )
+    return [
+        BildCorrectionOut(
+            id=r.id,
+            title=r.title,
+            published=r.published,
+            source_url=r.source_url,
+            article_url=r.article_url,
+        )
+        for r in rows
+    ]
 
-@router.post("/corrections", response_model=BildCorrectionOut, status_code=201)
-def create_correction(payload: BildCorrectionIn, session = Depends(get_session)):
-    row = BildCorrection(**payload.dict())
+# --- Corrections: POST ---
+@router.post("/corrections", response_model=BildCorrectionOut, status_code=201)  # <-- Pfad fix
+def create_correction(payload: BildCorrectionIn, session: Session = Depends(get_db_session)):
+    row = BildCorrection(
+        id=payload.id,
+        title=payload.title,
+        published=payload.published,
+        source_url=payload.source_url,
+        article_url=payload.article_url,
+    )
     session.add(row)
     try:
         session.commit()
-    except IntegrityError:
+    except Exception as e:
+        from sqlalchemy.exc import IntegrityError
         session.rollback()
-        raise HTTPException(status_code=409, detail="duplicate")
-    return row
+        if isinstance(e, IntegrityError):
+            raise HTTPException(status_code=409, detail="duplicate")
+        raise
+    session.refresh(row)
+    return BildCorrectionOut(
+        id=row.id,
+        title=row.title,
+        published=row.published,
+        source_url=row.source_url,
+        article_url=row.article_url,
+    )
