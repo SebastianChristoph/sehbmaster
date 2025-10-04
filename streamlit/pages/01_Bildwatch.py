@@ -202,64 +202,95 @@ try:
             st.info("No category data available.")
 
        
-        # Corrections per day (absolute) + Averages
+     
+        # Corrections per day (absolute) + Averages  (robust)
         # -----------------------------
         st.subheader("Corrections per day (Europe/Berlin)")
 
-        if "dfc" in locals() and not dfc.empty:
-            # Wähle, welche Zeitbasis für Tag/Stunde gilt
-            basis = st.radio(
-                "Basis for day/hour calculation",
-                ["Published (UTC → Europe/Berlin)", "Ingested (created_at, UTC → Europe/Berlin)"],
-                horizontal=True,
-                index=0,
-                key="corrections_daily_basis",
-            )
-            use_col = "published_local" if basis.startswith("Published") else "ingested_local"
+        def _ensure_local_time_cols(df: pd.DataFrame) -> pd.DataFrame:
+            """Sorgt dafür, dass published_local / ingested_local vorhanden sind."""
+            out = df.copy()
+            if "published_local" not in out.columns:
+                out["published_local"] = pd.to_datetime(
+                    out.get("published"), utc=True, errors="coerce"
+                ).dt.tz_convert(TZ)
+            if "ingested_local" not in out.columns:
+                out["ingested_local"] = pd.to_datetime(
+                    out.get("created_at"), utc=True, errors="coerce"
+                ).dt.tz_convert(TZ)
+            return out
 
-            tmp = dfc[[use_col, "id"]].copy()
-            tmp["day"] = tmp[use_col].dt.date  # lokales Datum (Europe/Berlin)
+        try:
+            if "dfc" not in locals() or dfc is None or dfc.empty:
+                st.info("No corrections available yet.")
+            else:
+                dfc = _ensure_local_time_cols(dfc)
 
-            # Absolute Anzahl pro Tag
-            counts_day = (
-                tmp.groupby("day", as_index=False)["id"]
-                .count()
-                .rename(columns={"id": "count"})
-                .sort_values("day")
-            )
+                basis = st.radio(
+                    "Basis for day/hour calculation",
+                    ["Published (UTC → Europe/Berlin)", "Ingested (created_at, UTC → Europe/Berlin)"],
+                    horizontal=True,
+                    index=0,
+                    key="corrections_daily_basis",
+                )
+                use_col = "published_local" if basis.startswith("Published") else "ingested_local"
 
-            fig_day = px.bar(
-                counts_day,
-                x="day",
-                y="count",
-                title="Corrections per day (absolute)",
-                labels={"day": "Day", "count": "Corrections"},
-            )
-            # Kategorie-Achse, damit nur vorhandene Tage gezeigt werden
-            fig_day.update_xaxes(type="category")
-            st.plotly_chart(fig_day, use_container_width=True)
+                tmp = dfc[[use_col, "id"]].dropna(subset=[use_col]).copy()
+                if tmp.empty:
+                    st.info("No timestamps available for this basis.")
+                else:
+                    # lokales Datum
+                    tmp["day"] = tmp[use_col].dt.date
 
-            # Kennzahlen
-            n_days = tmp["day"].nunique()
-            total = len(tmp)
-            avg_per_day = (total / n_days) if n_days else 0.0
-            avg_per_hour_overall = (total / (n_days * 24)) if n_days else 0.0
+                    # Zählt pro Tag
+                    counts = (
+                        tmp.groupby("day", as_index=False)["id"]
+                        .count()
+                        .rename(columns={"id": "count"})
+                    )
 
-            c1, c2 = st.columns(2)
-            c1.metric("Ø corrections per day", f"{avg_per_day:.2f}")
-            c2.metric("Ø corrections per hour (overall)", f"{avg_per_hour_overall:.3f}")
+                    # Achse lückenlos machen (Tage ohne Korrekturen = 0)
+                    day_min = pd.to_datetime(min(tmp["day"]))
+                    day_max = pd.to_datetime(max(tmp["day"]))
+                    all_days = pd.date_range(day_min, day_max, freq="D")
 
-            day_min = str(min(tmp["day"])) if n_days else "-"
-            day_max = str(max(tmp["day"])) if n_days else "-"
-            st.caption(f"Based on {n_days} day(s) from {day_min} to {day_max}. Total corrections: {total}.")
-        else:
-            st.info("No corrections available yet.")
+                    counts_full = (
+                        counts.set_index(pd.to_datetime(counts["day"]))
+                        .reindex(all_days, fill_value=0)
+                        .rename_axis("day")
+                        .reset_index()
+                    )
+                    counts_full["day"] = counts_full["day"].dt.date
+                    counts_full = counts_full[["day", "count"]]
 
+                    # Plot
+                    fig_day = px.bar(
+                        counts_full,
+                        x="day",
+                        y="count",
+                        title="Corrections per day (absolute)",
+                        labels={"day": "Day", "count": "Corrections"},
+                    )
+                    fig_day.update_xaxes(type="category")
+                    st.plotly_chart(fig_day, use_container_width=True)
 
-    else:
-        st.info("No corrections found.")
-except Exception as e:
-    st.error(f"Error while loading corrections: {e}")
+                    # Kennzahlen
+                    total = int(tmp.shape[0])
+                    n_days = len(all_days)  # inkl. Tage ohne Korrekturen
+                    avg_per_day = total / n_days if n_days else 0.0
+                    avg_per_hour_overall = total / (n_days * 24) if n_days else 0.0
+
+                    c1, c2 = st.columns(2)
+                    c1.metric("Ø corrections per day", f"{avg_per_day:.2f}")
+                    c2.metric("Ø corrections per hour (overall)", f"{avg_per_hour_overall:.3f}")
+
+                    st.caption(
+                        f"Based on {n_days} day(s) from {all_days.min().date()} to {all_days.max().date()}. "
+                        f"Total corrections: {total}."
+                    )
+        except Exception as e:
+            st.error(f"Error while loading corrections: {e}")
+
 
 st.divider()
 
