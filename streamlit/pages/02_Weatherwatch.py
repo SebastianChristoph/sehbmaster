@@ -15,7 +15,7 @@ from api_client import (
 
 st.set_page_config(page_title="sehbmaster – Weatherwatch", page_icon="⛅", layout="wide")
 st.title("⛅ Weatherwatch")
-st.caption("Vorhersage-Güte (Lead 1..N) vs. Beobachtung (Lead 0). Temperaturen: Min/Max separat. Zusätzlich Bias und Pivot-Tabellen je Variable.")
+st.caption("Vorhersage-Güte (Lead 1..N) vs. Beobachtung (Lead 0). Temperaturen: Min/Max separat. Zusätzlich Bias und Pivot-Tabellen je Variable. Mit Brier/Directional Accuracy für Regenwahrscheinlichkeit.")
 
 # ---------------------------------
 # Konstanten
@@ -142,25 +142,31 @@ def weighted_merge_accuracy(acc_list: List[Dict]) -> pd.DataFrame:
     frames = []
     for acc in acc_list:
         b = (acc or {}).get("buckets", [])
-        if not b: 
+        if not b:
             continue
         df = pd.DataFrame(b)
         frames.append(df)
     if not frames:
         return pd.DataFrame()
     df_all = pd.concat(frames, ignore_index=True)
+
     # Gruppieren nach Lead und gewichtet mitteln
     def wavg(series, weights):
         m = series.notna() & weights.notna() & (weights > 0)
         return (series[m] * weights[m]).sum() / weights[m].sum() if m.any() else np.nan
+
     g = df_all.groupby("lead_days", as_index=False).apply(
         lambda d: pd.Series({
             "n": int(d["n"].fillna(0).sum()),
-            "temp_min_mae": wavg(d["temp_min_mae"], d["n"]),
-            "temp_max_mae": wavg(d["temp_max_mae"], d["n"]),
-            "wind_mae":     wavg(d["wind_mae"],     d["n"]),
-            "rain_mae":     wavg(d["rain_mae"],     d["n"]),
-            "weather_match_pct": wavg(d["weather_match_pct"], d["n"]),
+            "temp_min_mae": wavg(d.get("temp_min_mae"), d["n"]),
+            "temp_max_mae": wavg(d.get("temp_max_mae"), d["n"]),
+            "wind_mae":     wavg(d.get("wind_mae"),     d["n"]),
+            "rain_mae":     wavg(d.get("rain_mae"),     d["n"]),
+            "weather_match_pct": wavg(d.get("weather_match_pct"), d["n"]),
+            # NEU: Wahrscheinlichkeitsmetriken (gewichtete Mittel; ohne separates prob_n approximieren wir mit n)
+            "rain_prob_brier":        wavg(d.get("rain_prob_brier"), d["n"]),
+            "rain_prob_diracc_pct":   wavg(d.get("rain_prob_diracc_pct"), d["n"]),
+            "rain_prob_mae_pctpts":   wavg(d.get("rain_prob_mae_pctpts"), d["n"]),
         })
     ).reset_index(drop=True).sort_values("lead_days")
     return g
@@ -218,9 +224,9 @@ def compute_bias_buckets_grouped(df: pd.DataFrame, max_lead: int) -> pd.DataFram
     return g
 
 # ---------------------------------
-# Accuracy (MAE)
+# Accuracy (MAE + Probabilistik)
 # ---------------------------------
-st.subheader("Accuracy (MAE)")
+st.subheader("Accuracy (MAE & Probabilistik)")
 try:
     if city == CITY_ALL_LABEL:
         acc_list = []
@@ -267,11 +273,43 @@ try:
             st.plotly_chart(fig_r, width="stretch")
             caption_mae("Regen", df_acc, model, city_label, frm, to)
 
+        # Wetter-String (exakte Übereinstimmung)
         fig_m = px.bar(df_acc, x="lead_days", y="weather_match_pct",
                        title=f"Wetter-String: exakte Treffer (%) – {model} @ {city_label}")
         fig_m.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Trefferquote (%)")
         st.plotly_chart(fig_m, width="stretch")
         caption_weather_string(df_acc, model, city_label, frm, to)
+
+        # ---- NEU: Probabilistische Metriken für Regenwahrscheinlichkeit ----
+        if "rain_prob_brier" in df_acc.columns:
+            fig_bs = px.line(df_acc, x="lead_days", y="rain_prob_brier", markers=True,
+                             title=f"Brier Score Regenwahrscheinlichkeit – {model} @ {city_label}")
+            fig_bs.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Brier (niedriger besser)")
+            st.plotly_chart(fig_bs, width="stretch")
+            st.caption(
+                "Brier Score: mittl. quadratischer Fehler zwischen Vorhersage-p (0..1) und Ereignis (0/1, Regen ≥ 0.1 mm). "
+                f"Zeitraum: {frm} bis {to}. Leads: {list_leads_used(df_acc.loc[df_acc['n'].fillna(0) > 0, 'lead_days'])}."
+            )
+
+        if "rain_prob_diracc_pct" in df_acc.columns:
+            fig_da = px.bar(df_acc, x="lead_days", y="rain_prob_diracc_pct",
+                            title=f"Regen-Wahrscheinlichkeit: Directional Accuracy @50% – {model} @ {city_label}")
+            fig_da.update_layout(xaxis_title="Lead (Tage)", yaxis_title="Trefferquote (%)")
+            st.plotly_chart(fig_da, width="stretch")
+            st.caption(
+                "Directional Accuracy @50%: Anteil der Fälle, in denen p≥50% korrekt ein Regen-Ereignis (≥0.1 mm) vorhersagt "
+                "bzw. p<50% korrekt kein Ereignis. "
+                f"Zeitraum: {frm} bis {to}."
+            )
+
+        if "rain_prob_mae_pctpts" in df_acc.columns:
+            fig_pm = px.line(df_acc, x="lead_days", y="rain_prob_mae_pctpts", markers=True,
+                             title=f"MAE (%-Punkte) Regenwahrscheinlichkeit – {model} @ {city_label}")
+            fig_pm.update_layout(xaxis_title="Lead (Tage)", yaxis_title="MAE (%-Punkte)")
+            st.plotly_chart(fig_pm, width="stretch")
+            st.caption(
+                "Mittlerer absoluter Fehler in %-Punkten zwischen p und beobachtetem Ereignis (0/100)."
+            )
     else:
         st.info("Keine Accuracy-Daten im Zeitraum.")
 except Exception as e:

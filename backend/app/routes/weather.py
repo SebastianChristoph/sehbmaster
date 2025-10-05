@@ -20,12 +20,14 @@ from ..schemas_weather import (
 router = APIRouter(prefix="/api/weather", tags=["weather"])
 API_KEY = os.getenv("INGEST_API_KEY", "dev-secret")
 TZ = ZoneInfo("Europe/Berlin")
+RAIN_EVENT_THRESHOLD_MM = 0.1  # "Regen-Event", wenn obs >= 0.1 mm
 
 def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return True
 
+# ---------- UPSERT ----------
 # ---------- UPSERT ----------
 @router.post("/data", response_model=WeatherDataOut, status_code=201)
 def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
@@ -45,6 +47,8 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
                 temp_max_c=payload.temp_max_c,
                 wind_mps=payload.wind_mps,
                 rain_mm=payload.rain_mm,
+                # NEU:
+                rain_probability_pct=payload.rain_probability_pct,
             )
             .on_conflict_do_update(
                 index_elements=[table.c.target_date, table.c.model, table.c.city, table.c.lead_days],
@@ -56,6 +60,8 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
                     "temp_max_c": payload.temp_max_c,
                     "wind_mps": payload.wind_mps,
                     "rain_mm": payload.rain_mm,
+                    # NEU:
+                    "rain_probability_pct": payload.rain_probability_pct,
                 },
             )
             .returning(*table.c)
@@ -63,6 +69,7 @@ def upsert_weather_data(payload: WeatherDataIn, _=Depends(require_api_key)):
         row = s.execute(stmt).mappings().first()
         s.commit()
         return WeatherDataOut(**row)  # type: ignore[arg-type]
+
 
 # ---------- SELECT ----------
 @router.get("/data", response_model=List[WeatherDataOut])
@@ -101,6 +108,7 @@ def list_weather_data(
                 wind_mps=r.wind_mps,
                 rain_mm=r.rain_mm,
                 created_at=r.created_at,
+                rain_probability_pct=r.rain_probability_pct,
             ) for r in rows
         ]
 
@@ -177,6 +185,10 @@ def get_accuracy(
             wind_err = 0.0
             rain_err = 0.0
             weather_match = 0
+            brier_sum = 0.0
+            diracc_hits = 0
+            prob_mae_sum = 0.0
+            prob_n = 0
 
             for fc in fc_rows:
                 obs = obs_by_day.get(fc.target_date)
@@ -194,6 +206,18 @@ def get_accuracy(
                 if fc.weather and obs.weather:
                     weather_match += int(fc.weather.strip().lower() == obs.weather.strip().lower())
 
+                p = fc.rain_probability_pct
+                if p is not None and obs.rain_mm is not None:
+                    y = 1.0 if (obs.rain_mm >= RAIN_EVENT_THRESHOLD_MM) else 0.0
+                    p01 = max(0.0, min(1.0, float(p) / 100.0))  # clamp & norm
+
+                    brier_sum += (p01 - y) ** 2
+                    # "Directional Accuracy" bei 50%-Schwelle:
+                    diracc_hits += int((p01 >= 0.5 and y == 1.0) or (p01 < 0.5 and y == 0.0))
+                    # optional: absoluter Fehler in %-Punkten
+                    prob_mae_sum += abs(100.0 * p01 - 100.0 * y)
+                    prob_n += 1
+
             buckets.append(
                 LeadBucketAccuracy(
                     lead_days=d,
@@ -203,6 +227,10 @@ def get_accuracy(
                     wind_mae=round(wind_err / n, 3) if n else None,
                     rain_mae=round(rain_err / n, 3) if n else None,
                     weather_match_pct=round((weather_match / n) * 100.0, 2) if n else None,
+                     # NEU:
+                    rain_prob_brier=round(brier_sum / prob_n, 4) if prob_n else None,
+                    rain_prob_diracc_pct=round((diracc_hits / prob_n) * 100.0, 2) if prob_n else None,
+                    rain_prob_mae_pctpts=round(prob_mae_sum / prob_n, 2) if prob_n else None,  # optional
                 )
             )
 

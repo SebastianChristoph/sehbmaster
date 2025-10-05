@@ -43,6 +43,11 @@ class LeadBucketAccuracy(BaseModel):
     wind_mae: Optional[float] = None
     rain_mae: Optional[float] = None
     weather_match_pct: Optional[float] = None
+    # NEU: Regenwahrscheinlichkeit
+    rain_prob_brier: Optional[float] = None                 # niedriger ist besser
+    rain_prob_diracc_pct: Optional[float] = None            # Directional Accuracy @50%
+    # optional, falls du willst:
+    rain_prob_mae_pctpts: Optional[float] = None            # mittl. absoluter Fehler in %-Punkten
 
 class AccuracySummary(BaseModel):
     model: str
