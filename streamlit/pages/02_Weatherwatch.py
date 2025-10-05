@@ -29,7 +29,7 @@ st.caption(
 # ────────────────────────────────────────────────────────────────────────────────
 # Constants
 # ────────────────────────────────────────────────────────────────────────────────
-KNOWN_MODELS = ["open-meteo", "metno", "wettercom"]
+KNOWN_MODELS = ["open-meteo", "metno", "wettercom", "default"]
 KNOWN_CITIES = [
     "berlin", "hamburg", "muenchen", "koeln", "frankfurt", "stuttgart",
     "duesseldorf", "dortmund", "essen", "leipzig", "bremen", "dresden",
@@ -45,17 +45,25 @@ NUM_VARS = {
     "rain_mm":    {"title": "Precipitation (mm)", "unit": "mm"},
 }
 
-# traffic-light thresholds for |forecast − observation|
-DEFAULT_THRESHOLDS = {
+DEFAULT_THRESHOLDS = {  # traffic-light thresholds for |forecast − observation|
     "temp_min_c": (1.0, 2.0),
     "temp_max_c": (1.0, 2.0),
     "wind_mps":   (0.6, 1.2),
     "rain_mm":    (0.5, 1.5),
 }
-
 # PoP thresholds in %-points vs. 0/100 observed event
 DEFAULT_THRESHOLDS_PROB = (10.0, 25.0)
 RAIN_EVENT_THRESHOLD_MM = 0.1
+
+# Overall score defaults (weights will be normalized to sum=1)
+DEFAULT_WEIGHTS = {
+    "w_tmax": 0.30,
+    "w_tmin": 0.30,
+    "w_pop":  0.30,
+    "w_rain": 0.06,
+    "w_wind": 0.04,
+}
+DEFAULT_SCORE_COLOR = (80.0, 60.0)  # green/orange, orange/red
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Cached loaders
@@ -98,8 +106,7 @@ def load_available_year_months(model: str, city: str) -> list[tuple[int,int]]:
     dt = pd.to_datetime(df["target_date"], errors="coerce")
     ym = pd.DataFrame({"y": dt.dt.year, "m": dt.dt.month})
     pairs = (
-        ym.dropna()
-          .astype({"y":"int32","m":"int16"})
+        ym.dropna().astype({"y":"int32","m":"int16"})
           .drop_duplicates()
           .sort_values(["y","m"])
     )
@@ -130,17 +137,29 @@ with st.sidebar:
     thr_wind_o = st.slider("Wind (m/s): orange/red",   0.0, 4.0, DEFAULT_THRESHOLDS["wind_mps"][1], key="thr_wind_o")
     thr_rain_g = st.slider("Precip (mm): green/orange", 0.0, 5.0, DEFAULT_THRESHOLDS["rain_mm"][0], key="thr_rain_g")
     thr_rain_o = st.slider("Precip (mm): orange/red",   0.0, 8.0, DEFAULT_THRESHOLDS["rain_mm"][1], key="thr_rain_o")
-
     thresholds = {
         "temp_min_c": (thr_temp_g, thr_temp_o),
         "temp_max_c": (thr_temp_g, thr_temp_o),
         "wind_mps":   (thr_wind_g, thr_wind_o),
         "rain_mm":    (thr_rain_g, thr_rain_o),
     }
-
     thr_prob_g = st.slider("PoP error (%-points): green/orange", 0.0, 50.0, DEFAULT_THRESHOLDS_PROB[0], key="thr_prob_g")
     thr_prob_o = st.slider("PoP error (%-points): orange/red",   0.0, 60.0, DEFAULT_THRESHOLDS_PROB[1], key="thr_prob_o")
     thresholds_prob = (thr_prob_g, thr_prob_o)
+
+    st.header("Overall score – weights")
+    st.caption("Weights are normalized to sum to 1. If a component is missing (e.g., PoP), the remaining weights are re-normalized per row.")
+    w_tmax = st.slider("Weight: Temp MAX", 0.0, 1.0, DEFAULT_WEIGHTS["w_tmax"], step=0.01)
+    w_tmin = st.slider("Weight: Temp MIN", 0.0, 1.0, DEFAULT_WEIGHTS["w_tmin"], step=0.01)
+    w_pop  = st.slider("Weight: PoP",      0.0, 1.0, DEFAULT_WEIGHTS["w_pop"],  step=0.01)
+    w_rain = st.slider("Weight: Precip (mm)", 0.0, 1.0, DEFAULT_WEIGHTS["w_rain"], step=0.01)
+    w_wind = st.slider("Weight: Wind (m/s)", 0.0, 1.0, DEFAULT_WEIGHTS["w_wind"], step=0.01)
+    weights_cfg = {"w_tmax": w_tmax, "w_tmin": w_tmin, "w_pop": w_pop, "w_rain": w_rain, "w_wind": w_wind}
+
+    st.caption("Cell colors for the overall score (0–100, higher is better).")
+    score_green, score_orange = st.slider("Score (%): green/orange & orange/red", 0.0, 100.0,
+                                          DEFAULT_SCORE_COLOR, step=1.0, key="score_thr")
+    score_thresholds = (score_green, score_orange)
 
 if st.button("🔄 Refresh"):
     load_accuracy.clear(); load_data_window.clear(); st.rerun()
@@ -185,6 +204,14 @@ def caption_pop_pivot(city_lbl: str):
         f"Cells show forecast probability of precipitation (PoP, %). Column 0 shows the observed event as 0/100 (rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm). "
         "Cell colors reflect absolute error in %-points vs. the observed 0/100."
     )
+
+def _normalize_weights(w: Dict[str, float]) -> Dict[str, float]:
+    total = sum(max(0.0, float(v)) for v in w.values())
+    if total <= 0:
+        return {k: 0.0 for k in w}
+    return {k: float(v)/total for k, v in w.items()}
+
+weights_norm = _normalize_weights(weights_cfg)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Aggregation helpers
@@ -265,6 +292,95 @@ def compute_bias_buckets_grouped(df: pd.DataFrame, max_lead: int) -> pd.DataFram
         })
     ).reset_index(drop=True).sort_values("lead_days")
     return g
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Overall score computation
+# ────────────────────────────────────────────────────────────────────────────────
+def _subscore(err: float, orange_thr: float) -> float:
+    """Convert an absolute error into a 0..100 subscore using the orange threshold as scale."""
+    if pd.isna(err) or orange_thr is None or orange_thr <= 0:
+        return np.nan
+    e = float(err)
+    n = min(1.0, max(0.0, e / float(orange_thr)))
+    return (1.0 - n) * 100.0
+
+def compute_overall_scores(df_all: pd.DataFrame,
+                           thresholds_in: Dict[str, Tuple[float, float]],
+                           thresholds_prob_in: Tuple[float, float],
+                           weights_in: Dict[str, float]) -> pd.DataFrame:
+    """
+    For each (city, target_date, lead_days) compute an overall score 0..100.
+    Subscores:
+      - Temp min/max, wind, rain_mm: use |forecast - obs|; scale by orange threshold.
+      - PoP: |p% - (obs event 0/100)|; scale by PoP orange threshold (percentage points).
+    Weights are normalized globally and re-normalized per row to the actually available subscores.
+    """
+    if df_all.empty:
+        return pd.DataFrame(columns=["city","target_date","lead_days","score_overall"])
+
+    have_prob = "rain_probability_pct" in df_all.columns
+    out_rows = []
+    w_norm = _normalize_weights(weights_in)
+
+    for city_name, dcity in df_all.groupby("city"):
+        obs = dcity[dcity["lead_days"] == 0].set_index("target_date")
+        # merge obs columns
+        keep_obs = ["temp_min_c","temp_max_c","wind_mps","rain_mm"]
+        m = dcity.merge(
+            obs[keep_obs],
+            left_on="target_date", right_index=True, suffixes=("", "_obs")
+        )
+
+        # observed event 0/100 for PoP base
+        event_base = np.where(m["rain_mm_obs"].fillna(0) >= RAIN_EVENT_THRESHOLD_MM, 100.0, 0.0)
+
+        # errors
+        err_tmin = (m["temp_min_c"] - m["temp_min_c_obs"]).abs()
+        err_tmax = (m["temp_max_c"] - m["temp_max_c_obs"]).abs()
+        err_wind = (m["wind_mps"]   - m["wind_mps_obs"]).abs()
+        err_rain = (m["rain_mm"]    - m["rain_mm_obs"]).abs()
+        if have_prob:
+            err_pop = (m["rain_probability_pct"] - event_base).abs()
+        else:
+            err_pop = pd.Series(np.nan, index=m.index)
+
+        # subscores
+        s_tmin = err_tmin.apply(lambda e: _subscore(e, thresholds_in["temp_min_c"][1]))
+        s_tmax = err_tmax.apply(lambda e: _subscore(e, thresholds_in["temp_max_c"][1]))
+        s_wind = err_wind.apply(lambda e: _subscore(e, thresholds_in["wind_mps"][1]))
+        s_rain = err_rain.apply(lambda e: _subscore(e, thresholds_in["rain_mm"][1]))
+        s_pop  = err_pop.apply(lambda e: _subscore(e, thresholds_prob_in[1]))
+
+        # weighted combo (normalize to available components per row)
+        for i, row in m.iterrows():
+            subs = {
+                "w_tmax": s_tmax.iat[i],
+                "w_tmin": s_tmin.iat[i],
+                "w_pop":  s_pop.iat[i],
+                "w_rain": s_rain.iat[i],
+                "w_wind": s_wind.iat[i],
+            }
+            avail = {k: v for k, v in subs.items() if not pd.isna(v)}
+            if not avail:
+                score = np.nan
+            else:
+                # re-normalize weights to available components
+                w_av = {k: v for k, v in w_norm.items() if k in avail}
+                s = sum(w_av.values())
+                if s <= 0:
+                    # equal weights fallback
+                    score = float(np.mean(list(avail.values())))
+                else:
+                    score = float(sum(w_av[k] * avail[k] for k in avail) / s)
+
+            out_rows.append({
+                "city": city_name,
+                "target_date": row["target_date"],
+                "lead_days": int(row["lead_days"]),
+                "score_overall": score,
+            })
+
+    return pd.DataFrame(out_rows)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Accuracy
@@ -406,35 +522,40 @@ except Exception as e:
 st.divider()
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Pivot helpers
+# Pivot helpers (incl. overall score)
 # ────────────────────────────────────────────────────────────────────────────────
 st.subheader("Pivot tables per variable (rows = dates, columns = leads −7…0)")
 
 def _lead_to_negcol(lead: int) -> int:
     return -lead
 
-def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: Tuple[float,float]):
-    """Single-city or ALL(per-city rows) pivot with traffic-light coloring vs. obs (col 0)."""
+def _build_colored_table_from_values(pv: pd.DataFrame, style_func) -> "pd.io.formats.style.Styler":
+    pv_show = pv.copy()
+    if isinstance(pv_show.index, pd.MultiIndex):
+        pv_show.insert(0, "city", [idx[0] for idx in pv_show.index])
+        pv_show.insert(1, "date", [str(idx[1]) for idx in pv_show.index])
+    else:
+        pv_show.insert(0, "date", pv_show.index.astype(str))
+    return pv_show.style.format(precision=2).apply(lambda _: pv.applymap(style_func), axis=None)
+
+def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float]):
     if df_all.empty:
         return pd.DataFrame()
-
     cols = ["target_date", "lead_days", var, "city"]
     df = df_all[cols].copy()
     df["neg_lead"] = df["lead_days"].apply(_lead_to_negcol)
     index_cols = ["target_date"] if df["city"].nunique() == 1 else ["city", "target_date"]
     pv = df.pivot_table(index=index_cols, columns="neg_lead", values=var, aggfunc="first").sort_index()
-
     for col in range(-7, 1):
-        if col not in pv.columns:
-            pv[col] = np.nan
+        if col not in pv.columns: pv[col] = np.nan
     pv = pv[sorted(pv.columns)]
 
-    pv_err = pv.copy()
     base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
+    pv_err = pv.copy()
     for c in pv.columns:
         pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
 
-    thr_g, thr_o = thresholds
+    thr_g, thr_o = thresholds_v
     def colorize(err):
         if pd.isna(err): return ""
         if err <= thr_g: return "background-color: #e6f4ea"
@@ -451,55 +572,9 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: Tuple[float,float])
         pv_show.insert(1, "date", [str(idx[1]) for idx in pv_show.index])
     else:
         pv_show.insert(0, "date", pv_show.index.astype(str))
-
-    styler = pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
-    return styler
-
-def _build_pivot_ALL_aggregate(df_all: pd.DataFrame, var: str, thresholds: Tuple[float,float]):
-    """
-    NEW: For City=ALL in the PDF when 'Aggregate' is chosen.
-    We average across cities for each (target_date, lead_days), then color vs. the averaged observation (lead=0).
-    """
-    if df_all.empty:
-        return pd.DataFrame()
-
-    need = {"target_date","lead_days","city",var}
-    if not need.issubset(df_all.columns):
-        return pd.DataFrame()
-
-    d = df_all[list(need)].copy()
-    # mean across cities for each day & lead
-    g = d.groupby(["target_date","lead_days"], as_index=False)[var].mean()
-    g["neg_lead"] = -g["lead_days"].astype(int)
-    pv = g.pivot_table(index="target_date", columns="neg_lead", values=var, aggfunc="first").sort_index()
-
-    for col in range(-7, 1):
-        if col not in pv.columns:
-            pv[col] = np.nan
-    pv = pv[sorted(pv.columns)]
-
-    base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
-    pv_err = pv.copy()
-    for c in pv.columns:
-        pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
-
-    thr_g, thr_o = thresholds
-    def colorize(err):
-        if pd.isna(err): return ""
-        if err <= thr_g: return "background-color: #e6f4ea"
-        if err <= thr_o: return "background-color: #fff4e5"
-        return "background-color: #fde8e8"
-
-    styled = pv.copy()
-    for c in pv.columns:
-        styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
-
-    pv_show = pv.copy()
-    pv_show.insert(0, "date", pv_show.index.astype(str))
     return pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
 
 def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
-    """Per-city PoP pivot with 0/100 obs column."""
     if df_all.empty:
         return pd.DataFrame()
     cols = ["target_date", "lead_days", "rain_probability_pct", "rain_mm", "city"]
@@ -516,10 +591,8 @@ def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
 
     index_cols = ["target_date"] if d["city"].nunique() == 1 else ["city", "target_date"]
     pv = d.pivot_table(index=index_cols, columns="neg_lead", values="rain_probability_pct", aggfunc="first").sort_index()
-
     for col in range(-7, 1):
-        if col not in pv.columns:
-            pv[col] = np.nan
+        if col not in pv.columns: pv[col] = np.nan
     pv = pv[sorted(pv.columns)]
 
     if isinstance(pv.index, pd.MultiIndex):
@@ -550,57 +623,46 @@ def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
         pv_show.insert(1, "date", [str(idx[1]) for idx in pv_show.index])
     else:
         pv_show.insert(0, "date", pv_show.index.astype(str))
-
     return pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
 
-def _build_pivot_prob_ALL_aggregate(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
-    """
-    NEW: Aggregate PoP pivot for ALL cities.
-    Values: mean PoP across cities for each lead/day.
-    Base col 0: fraction of cities with event (≥threshold mm)*100.
-    """
-    if df_all.empty or "rain_probability_pct" not in df_all.columns:
+# NEW: overall score pivot (per-city rows, like the numeric pivots)
+def _build_score_pivot(df_scores: pd.DataFrame, score_thr: Tuple[float, float]):
+    if df_scores.empty:
         return pd.DataFrame()
-    need = {"target_date","lead_days","city","rain_probability_pct","rain_mm"}
-    if not need.issubset(df_all.columns):
-        return pd.DataFrame()
-
-    d = df_all[list(need)].copy()
-    # mean PoP per day/lead across cities
-    g = d.groupby(["target_date","lead_days"], as_index=False)["rain_probability_pct"].mean()
-    g["neg_lead"] = -g["lead_days"].astype(int)
-    pv = g.pivot_table(index="target_date", columns="neg_lead", values="rain_probability_pct", aggfunc="first").sort_index()
-
-    # base: fraction of cities with event * 100
-    ev = d[d["lead_days"] == 0].copy()
-    ev["event_0_100"] = (ev["rain_mm"].fillna(0) >= RAIN_EVENT_THRESHOLD_MM).astype(float) * 100.0
-    base_series = ev.groupby("target_date")["event_0_100"].mean()
-    pv[0] = base_series.reindex(pv.index)
-
+    d = df_scores[["city","target_date","lead_days","score_overall"]].copy()
+    d["neg_lead"] = -d["lead_days"].astype(int)
+    index_cols = ["target_date"] if d["city"].nunique() == 1 else ["city","target_date"]
+    pv = d.pivot_table(index=index_cols, columns="neg_lead", values="score_overall", aggfunc="mean").sort_index()
     for col in range(-7, 1):
-        if col not in pv.columns:
-            pv[col] = np.nan
+        if col not in pv.columns: pv[col] = np.nan
     pv = pv[sorted(pv.columns)]
-
-    base = pv[0]
-    pv_err = pv.copy()
-    for c in pv.columns:
-        pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
-
-    thr_g, thr_o = thresholds_pp
-    def colorize(err):
-        if pd.isna(err): return ""
-        if err <= thr_g: return "background-color: #e6f4ea"
-        if err <= thr_o: return "background-color: #fff4e5"
+    g_thr, o_thr = score_thr
+    def style_cell(v):
+        if pd.isna(v): return ""
+        if v >= g_thr: return "background-color: #e6f4ea"
+        if v >= o_thr: return "background-color: #fff4e5"
         return "background-color: #fde8e8"
+    return _build_colored_table_from_values(pv, style_cell)
 
-    styled = pv.copy()
-    for c in pv.columns:
-        styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
-
-    pv_show = pv.copy()
-    pv_show.insert(0, "date", pv_show.index.astype(str))
-    return pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
+# NEW: overall score pivot (ALL cities aggregated across cities)
+def _build_score_pivot_ALL_aggregate(df_scores: pd.DataFrame, score_thr: Tuple[float, float]):
+    if df_scores.empty:
+        return pd.DataFrame()
+    d = df_scores[["target_date","lead_days","score_overall","city"]].copy()
+    g = d.groupby(["target_date","lead_days"], as_index=False)["score_overall"].mean()
+    g["neg_lead"] = -g["lead_days"].astype(int)
+    pv = g.pivot_table(index="target_date", columns="neg_lead", values="score_overall", aggfunc="first").sort_index()
+    for col in range(-7, 1):
+        if col not in pv.columns: pv[col] = np.nan
+    pv = pv[sorted(pv.columns)]
+    g_thr, o_thr = score_thr
+    def style_cell(v):
+        if pd.isna(v): return ""
+        if v >= g_thr: return "background-color: #e6f4ea"
+        if v >= o_thr: return "background-color: #fff4e5"
+        return "background-color: #fde8e8"
+    pv.insert(0, "date", pv.index.astype(str))
+    return pv.style.format(precision=1).apply(lambda _: pv.applymap(style_cell), axis=None)
 
 # ── Render pivot tables in the UI ───────────────────────────────────────────────
 try:
@@ -647,6 +709,19 @@ try:
         styler_prob = _build_pivot_prob(dfr, thresholds_prob)
         st.dataframe(styler_prob, use_container_width=True)
         caption_pop_pivot(city_label)
+
+        # NEW: overall model score (weighted)
+        st.markdown(f"**Overall model score (0–100, weighted) • {model} @ {city_label}**")
+        df_scores = compute_overall_scores(dfr, thresholds, thresholds_prob, weights_norm)
+        styler_score = _build_score_pivot(df_scores, score_thresholds)
+        st.dataframe(styler_score, use_container_width=True)
+        st.caption(
+            f"Score = weighted combination of subscores (Temp MAX/MIN, PoP, Precip mm, Wind). "
+            f"Each subscore maps absolute error to 0..100 using the orange thresholds as scale. "
+            f"Weights (normalized): Tmax {weights_norm['w_tmax']:.2f}, Tmin {weights_norm['w_tmin']:.2f}, "
+            f"PoP {weights_norm['w_pop']:.2f}, Rain {weights_norm['w_rain']:.2f}, Wind {weights_norm['w_wind']:.2f}. "
+            f"Green ≥ {score_thresholds[0]:.0f}, Orange ≥ {score_thresholds[1]:.0f}, else red."
+        )
 except Exception as e:
     st.error(f"Error creating tables: {e}")
 
@@ -739,6 +814,9 @@ with st.container():
         f"**Rain event definition:** rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm ⇒ event = 1 (100%), else 0.",
         "**PoP evaluation:** Brier score (lower is better), directional accuracy @50%, and MAE in percentage points vs. observed 0/100.",
         "**Pivot coloring:** By absolute error vs. observation (for PoP: vs. 0/100 event). Thresholds can be adjusted in the sidebar and are applied in the PDF.",
+        f"**Overall score:** per-row subscores map absolute errors to 0..100 using orange thresholds as scale; the weighted score uses normalized weights "
+        f"(Tmax {weights_norm['w_tmax']:.2f}, Tmin {weights_norm['w_tmin']:.2f}, PoP {weights_norm['w_pop']:.2f}, Rain {weights_norm['w_rain']:.2f}, Wind {weights_norm['w_wind']:.2f}). "
+        f"Score colors: green ≥ {score_thresholds[0]:.0f}, orange ≥ {score_thresholds[1]:.0f}, else red.",
         "**Data sources:** Open-Meteo API (daily aggregates), MET Norway / Yr API (hourly → daily aggregates), and wetter.com (HTML, 7-day page). "
         "Scraping of wetter.com is for testing/private purposes only; please respect their ToS and robots.txt.",
         "**ETL cadence:** Forecasts (lead 0..7) are upserted daily per model and city; later runs overwrite earlier ones for the same target date/lead.",
@@ -747,7 +825,7 @@ with st.container():
         st.markdown(f"- {b}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Monthly PDF report (pivot tables)
+# Monthly PDF report (pivot tables + overall score)
 # ────────────────────────────────────────────────────────────────────────────────
 try:
     import pdfkit  # needs wkhtmltopdf
@@ -770,7 +848,6 @@ with col_m2:
                                    if city in KNOWN_CITIES or city==CITY_ALL_LABEL else 1,
                             key="pdf_city")
 
-# When ALL cities: choose how to render in the PDF
 agg_mode = "Aggregate (mean across cities)" if rep_city == CITY_ALL_LABEL else "Single city"
 if rep_city == CITY_ALL_LABEL:
     agg_mode = st.radio(
@@ -781,7 +858,6 @@ if rep_city == CITY_ALL_LABEL:
         key="pdf_mode"
     )
 
-# available months for this selection
 pairs = load_available_year_months(rep_model, rep_city)
 if not pairs:
     st.info("No target dates available for this model/city. Adjust your selection.")
@@ -837,11 +913,55 @@ def _styler_html(styler: "pd.io.formats.style.Styler") -> str:
 
 def _pivot_html(df_all: pd.DataFrame, var: str, title: str, thresholds_local: Tuple[float,float], aggregate_all: bool) -> str:
     if aggregate_all:
-        styler = _build_pivot_ALL_aggregate(df_all, var, thresholds_local)
+        # reuse normal (per-city) builder; aggregate version not required for raw variables in PDF
+        styler = _build_pivot_ALL_aggregate(df_all, var, thresholds_local) if 'not-defined' == 'hack' else _build_pivot(df_all, var, thresholds_local)
+        # (keep per-city for readability in monthly report; change if you prefer aggregate)
     else:
         styler = _build_pivot(df_all, var, thresholds_local)
     html = _styler_html(styler)
     return f"<h3>{title}</h3>\n{html}"
+
+# aggregate version of numeric pivots (used when ALL+aggregate in PDF)
+def _build_pivot_ALL_aggregate(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float]):
+    if df_all.empty:
+        return pd.DataFrame()
+    d = df_all[["target_date","lead_days","city",var]].copy()
+    g = d.groupby(["target_date","lead_days"], as_index=False)[var].mean()
+    g["neg_lead"] = -g["lead_days"].astype(int)
+    pv = g.pivot_table(index="target_date", columns="neg_lead", values=var, aggfunc="first").sort_index()
+    for col in range(-7, 1):
+        if col not in pv.columns: pv[col] = np.nan
+    pv = pv[sorted(pv.columns)]
+    base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
+    thr_g, thr_o = thresholds_v
+    def colorize(err):
+        if pd.isna(err): return ""
+        if err <= thr_g: return "background-color: #e6f4ea"
+        if err <= thr_o: return "background-color: #fff4e5"
+        return "background-color: #fde8e8"
+    pv_err = pv.copy()
+    for c in pv.columns:
+        pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
+    styled = pv.copy()
+    for c in pv.columns:
+        styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
+    pv.insert(0, "date", pv.index.astype(str))
+    return pv.style.format(precision=2).apply(lambda _: styled, axis=None)
+
+def _pivot_weather_text_html(df_all: pd.DataFrame) -> str:
+    dfw = df_all[["target_date", "lead_days", "weather", "city"]].copy()
+    dfw["neg_lead"] = dfw["lead_days"].apply(_lead_to_negcol)
+    index_cols = ["target_date"] if dfw["city"].nunique() == 1 else ["city", "target_date"]
+    pvw = dfw.pivot_table(index=index_cols, columns="neg_lead", values="weather", aggfunc="first").sort_index()
+    for col in range(-7, 1):
+        if col not in pvw.columns: pvw[col] = np.nan
+    pvw = pvw[sorted(pvw.columns)]
+    if isinstance(pvw.index, pd.MultiIndex):
+        pvw.insert(0, "city", [idx[0] for idx in pvw.index])
+        pvw.insert(1, "date", [str(idx[1]) for idx in pvw.index])
+    else:
+        pvw.insert(0, "date", pvw.index.astype(str))
+    return "<h3>Outlook (weather text)</h3>\n" + pvw.to_html(index=False)
 
 def _pivot_rain_prob_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
     if "rain_probability_pct" not in df_all.columns:
@@ -851,6 +971,15 @@ def _pivot_rain_prob_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
     else:
         sty = _build_pivot_prob(df_all, thresholds_prob)
     return "<h3>Rain probability (%)</h3>\n" + _styler_html(sty)
+
+def _pivot_overall_score_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
+    df_scores = compute_overall_scores(df_all, thresholds, thresholds_prob, weights_norm)
+    if aggregate_all:
+        sty = _build_score_pivot_ALL_aggregate(df_scores, score_thresholds)
+    else:
+        sty = _build_score_pivot(df_scores, score_thresholds)
+    weights_txt = f"(weights: Tmax {weights_norm['w_tmax']:.2f}, Tmin {weights_norm['w_tmin']:.2f}, PoP {weights_norm['w_pop']:.2f}, Rain {weights_norm['w_rain']:.2f}, Wind {weights_norm['w_wind']:.2f})"
+    return f"<h3>Overall model score {weights_txt}</h3>\n" + _styler_html(sty)
 
 def _compose_report_html(df_month: pd.DataFrame, y: int, m: int, model_: str, city_: str, aggregate_all: bool) -> str:
     css = dedent("""
@@ -868,27 +997,36 @@ def _compose_report_html(df_month: pd.DataFrame, y: int, m: int, model_: str, ci
     scope = f"Model: {model_} | City: {city_}" + (" (AGGREGATE)" if aggregate_all and city_ == CITY_ALL_LABEL else "")
 
     blocks = []
-    blocks.append(_pivot_html(df_month, "temp_max_c", "Max temperature (°C)", thresholds["temp_max_c"], aggregate_all))
-    blocks.append(_pivot_html(df_month, "temp_min_c", "Min temperature (°C)", thresholds["temp_min_c"], aggregate_all))
-    blocks.append(_pivot_html(df_month, "wind_mps",   "Wind (m/s)",          thresholds["wind_mps"],   aggregate_all))
-    blocks.append(_pivot_html(df_month, "rain_mm",    "Precipitation (mm)",  thresholds["rain_mm"],    aggregate_all))
-    # Weather text aggregations are not well-defined across cities; omit for AGGREGATE to keep report crisp.
+    if aggregate_all and city_ == CITY_ALL_LABEL:
+        blocks.append(_styler_html(_build_pivot_ALL_aggregate(df_month, "temp_max_c", thresholds["temp_max_c"])))
+        blocks.append(_styler_html(_build_pivot_ALL_aggregate(df_month, "temp_min_c", thresholds["temp_min_c"])))
+        blocks.append(_styler_html(_build_pivot_ALL_aggregate(df_month, "wind_mps",   thresholds["wind_mps"])))
+        blocks.append(_styler_html(_build_pivot_ALL_aggregate(df_month, "rain_mm",    thresholds["rain_mm"])))
+    else:
+        blocks.append(_pivot_html(df_month, "temp_max_c", "Max temperature (°C)", thresholds["temp_max_c"], aggregate_all))
+        blocks.append(_pivot_html(df_month, "temp_min_c", "Min temperature (°C)", thresholds["temp_min_c"], aggregate_all))
+        blocks.append(_pivot_html(df_month, "wind_mps",   "Wind (m/s)",            thresholds["wind_mps"],   aggregate_all))
+        blocks.append(_pivot_html(df_month, "rain_mm",    "Precipitation (mm)",    thresholds["rain_mm"],    aggregate_all))
+
     blocks.append(_pivot_rain_prob_html(df_month, aggregate_all))
+    blocks.append(_pivot_overall_score_html(df_month, aggregate_all))
 
     n_rows = len(df_month) if isinstance(df_month, pd.DataFrame) else 0
     notes = dedent(f"""
     <h2>Methodology & Notes</h2>
     <ul>
-      <li>Target dates limited to {calendar.month_name[m]} {y}. Columns show leads −7…0; column 0 are observations.</li>
+      <li>Target dates limited to {calendar.month_name[m]} {y}. Columns show leads −7…0; column 0 are observations (for probability: observed 0/100). </li>
       <li>Color thresholds (from UI) applied in this PDF:
         <ul>
           <li>Temp: {thresholds['temp_min_c'][0]}/{thresholds['temp_min_c'][1]} °C (green/orange • orange/red)</li>
           <li>Wind: {thresholds['wind_mps'][0]}/{thresholds['wind_mps'][1]} m/s</li>
           <li>Precip: {thresholds['rain_mm'][0]}/{thresholds['rain_mm'][1]} mm</li>
           <li>PoP error: {thresholds_prob[0]}/{thresholds_prob[1]} %-points</li>
+          <li>Overall score color: green ≥ {score_thresholds[0]:.0f}, orange ≥ {score_thresholds[1]:.0f}</li>
         </ul>
       </li>
-      <li>PoP base column is the observed event (rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm) shown as 0 or 100; for ALL-aggregate it is the share of cities with an event (0..100).</li>
+      <li>Overall score weights (normalized): Tmax {weights_norm['w_tmax']:.2f}, Tmin {weights_norm['w_tmin']:.2f}, PoP {weights_norm['w_pop']:.2f}, Rain {weights_norm['w_rain']:.2f}, Wind {weights_norm['w_wind']:.2f}. Missing components are skipped and remaining weights re-normalized per row.</li>
+      <li>PoP base column uses rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm as event ⇒ 100 else 0; for ALL-aggregate the base is the share of cities with an event (0..100).</li>
       <li>Data source: your FastAPI endpoint <code>/api/weather/data</code>. Models as labeled above.</li>
       <li>Total rows in this month window: {n_rows}.</li>
     </ul>
@@ -931,11 +1069,9 @@ if btn:
                 fname_pdf = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}.pdf".replace(" ", "_")
                 st.download_button("⬇️ Download PDF", data=pdf_bytes, file_name=fname_pdf,
                                    mime="application/pdf", key="dl_pdf_main")
-                # open in new tab
                 b64 = base64.b64encode(pdf_bytes).decode("ascii")
                 pdf_url = f"data:application/pdf;base64,{b64}"
                 st.markdown(f"[🔎 Open PDF in a new tab]({pdf_url})", unsafe_allow_html=True)
-                # inline preview (falls back to new tab if blocked)
                 with st.expander("Preview PDF (inline)"):
                     st.markdown(f"<iframe src='{pdf_url}' width='100%' height='1000px' frameborder='0'></iframe>", unsafe_allow_html=True)
                 st.success("PDF generated.")
