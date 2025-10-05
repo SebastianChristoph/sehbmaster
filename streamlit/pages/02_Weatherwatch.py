@@ -16,6 +16,10 @@ from api_client import (
     delete_weather_logs,
 )
 
+import base64
+from streamlit import components
+
+
 st.set_page_config(page_title="Weatherwatch – Model Verification", page_icon="⛅", layout="wide")
 st.title("⛅ Weatherwatch (Model Verification)")
 st.caption(
@@ -890,7 +894,55 @@ def _make_pdf(html: str) -> bytes:
 gen_col1, gen_col2 = st.columns([1,2])
 with gen_col1:
     btn = st.button("📄 Generate monthly PDF (pivots)", type="primary")
+
 if btn:
+    try:
+        df_month = _df_for_month(rep_model, rep_city, rep_year, rep_month)
+        if df_month.empty:
+            st.warning("No data for the selected month/model/city.")
+        else:
+            html = _compose_report_html(df_month, rep_year, rep_month, rep_model, rep_city)
+            fname_base = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}".replace(" ", "_")
+
+            if pdfkit and _WKHTMLTOPDF:
+                pdf_bytes = _make_pdf(html)
+                fname_pdf = f"{fname_base}.pdf"
+
+                # 1) Regular download button (will open browser save dialog)
+                st.download_button("⬇️ Download PDF", data=pdf_bytes, file_name=fname_pdf, mime="application/pdf")
+
+                # 2) “Open in new tab” link using a data: URL
+                b64 = base64.b64encode(pdf_bytes).decode("ascii")
+                st.markdown(
+                    f'<a href="data:application/pdf;base64,{b64}" target="_blank">🔎 Open PDF in a new tab</a>',
+                    unsafe_allow_html=True,
+                )
+
+                # 3) Optional: inline preview (embed viewer right in the page)
+                with st.expander("Preview PDF (inline)"):
+                    components.v1.html(
+                        f'<iframe src="data:application/pdf;base64,{b64}" '
+                        f'width="100%" height="900" style="border:none;"></iframe>',
+                        height=900,
+                    )
+
+                st.success("PDF generated.")
+            else:
+                # Fallback: HTML download & open-in-new-tab if wkhtmltopdf is missing
+                st.info("wkhtmltopdf is not installed in the container. Offering HTML instead (you can print to PDF from your browser).")
+                html_bytes = html.encode("utf-8")
+                fname_html = f"{fname_base}.html"
+
+                st.download_button("⬇️ Download HTML", data=html_bytes, file_name=fname_html, mime="text/html")
+
+                b64_html = base64.b64encode(html_bytes).decode("ascii")
+                st.markdown(
+                    f'<a href="data:text/html;base64,{b64_html}" target="_blank">🔎 Open HTML in a new tab</a>',
+                    unsafe_allow_html=True,
+                )
+
+    except Exception as e:
+        st.error(f"PDF creation failed: {e}")
     try:
         df_month = _df_for_month(rep_model, rep_city, rep_year, rep_month)
         if df_month.empty:
