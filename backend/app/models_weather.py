@@ -4,14 +4,21 @@ from datetime import datetime, date
 from typing import Optional
 
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import BigInteger, SmallInteger, String, Date, Float, Text, DateTime
+from sqlalchemy import BigInteger, SmallInteger, String, Date, Float, Text, DateTime, CheckConstraint
 
 class BaseWeather(DeclarativeBase):
     pass
 
 class WeatherData(BaseWeather):
     __tablename__ = "data"
-    __table_args__ = {"schema": "weather"}
+    __table_args__ = (
+        CheckConstraint(
+            "(rain_probability_pct IS NULL) OR "
+            "(rain_probability_pct >= 0 AND rain_probability_pct <= 100)",
+            name="chk_rain_probability_pct_range",
+        ),
+        {"schema": "weather"},
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     target_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -21,7 +28,6 @@ class WeatherData(BaseWeather):
     run_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     weather: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # NEU: getrennte Temperaturen (+ Alt-Kompatibilität über temp_avg_c)
     temp_avg_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     temp_min_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     temp_max_c: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -30,7 +36,8 @@ class WeatherData(BaseWeather):
     rain_mm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
+    rain_probability_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
 class WeatherLog(BaseWeather):
     __tablename__ = "log"
     __table_args__ = {"schema": "weather"}

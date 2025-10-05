@@ -18,6 +18,7 @@ class WeatherDataIn(BaseModel):
     temp_max_c: Optional[float] = None
     wind_mps: Optional[float] = None
     rain_mm: Optional[float] = None
+    rain_probability_pct: Optional[float] = Field(default=None, ge=0, le=100)
 
 class WeatherDataOut(WeatherDataIn):
     id: int
