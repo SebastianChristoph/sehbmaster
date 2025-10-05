@@ -149,8 +149,9 @@ try:
         dfc["category"] = dfc["category_raw"].map(translate_category).fillna("Unknown")
 
         show_cols = [
-            "published", "created_at", "category", "title", "article_url", "source_url", "id"
+            "published", "created_at", "category", "title", "message", "article_url", "source_url", "id"
         ]
+        
         show_cols = [c for c in show_cols if c in dfc.columns]
 
         st.dataframe(
