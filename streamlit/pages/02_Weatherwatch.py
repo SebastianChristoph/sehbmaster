@@ -20,7 +20,7 @@ st.caption("Vorhersage-Güte (Lead 1..N) vs. Beobachtung (Lead 0). Temperaturen:
 # ---------------------------------
 # Konstanten
 # ---------------------------------
-KNOWN_MODELS = ["open-meteo", "metno", "wettercom", "default"]
+KNOWN_MODELS = ["open-meteo", "metno", "wettercom"]
 KNOWN_CITIES = [
     "berlin", "hamburg", "muenchen", "koeln", "frankfurt", "stuttgart",
     "duesseldorf", "dortmund", "essen", "leipzig", "bremen", "dresden",
@@ -43,6 +43,11 @@ DEFAULT_THRESHOLDS = {
     "wind_mps":   (0.6, 1.2),
     "rain_mm":    (0.5, 1.5),
 }
+
+# Regenwahrscheinlichkeit: Ampelschwellen für Fehler in %-Punkten (vs. Event 0/100)
+DEFAULT_THRESHOLDS_PROB = (10.0, 25.0)  # <=10 grün, <=25 orange, sonst rot
+# Event-Definition (Regen beobachtet)
+RAIN_EVENT_THRESHOLD_MM = 0.1
 
 # ---------------------------------
 # Caches / Loader
@@ -93,6 +98,11 @@ with st.sidebar:
         "wind_mps":   (thr_wind_g, thr_wind_o),
         "rain_mm":    (thr_rain_g, thr_rain_o),
     }
+
+    # Schwellen für Regenwahrscheinlichkeit (Fehler in %-Punkten)
+    thr_prob_g = st.slider("Regenw’keit (%-Punkte): grün/orange", 0.0, 50.0, DEFAULT_THRESHOLDS_PROB[0])
+    thr_prob_o = st.slider("Regenw’keit (%-Punkte): orange/rot",  0.0, 60.0, DEFAULT_THRESHOLDS_PROB[1])
+    thresholds_prob = (thr_prob_g, thr_prob_o)
 
 if st.button("🔄 Neu laden"):
     load_accuracy.clear(); load_data_window.clear(); st.rerun()
@@ -163,7 +173,7 @@ def weighted_merge_accuracy(acc_list: List[Dict]) -> pd.DataFrame:
             "wind_mae":     wavg(d.get("wind_mae"),     d["n"]),
             "rain_mae":     wavg(d.get("rain_mae"),     d["n"]),
             "weather_match_pct": wavg(d.get("weather_match_pct"), d["n"]),
-            # NEU: Wahrscheinlichkeitsmetriken (gewichtete Mittel; ohne separates prob_n approximieren wir mit n)
+            # Probabilistik (gewichtet mit n)
             "rain_prob_brier":        wavg(d.get("rain_prob_brier"), d["n"]),
             "rain_prob_diracc_pct":   wavg(d.get("rain_prob_diracc_pct"), d["n"]),
             "rain_prob_mae_pctpts":   wavg(d.get("rain_prob_mae_pctpts"), d["n"]),
@@ -280,7 +290,7 @@ try:
         st.plotly_chart(fig_m, width="stretch")
         caption_weather_string(df_acc, model, city_label, frm, to)
 
-        # ---- NEU: Probabilistische Metriken für Regenwahrscheinlichkeit ----
+        # Probabilistische Metriken für Regenwahrscheinlichkeit
         if "rain_prob_brier" in df_acc.columns:
             fig_bs = px.line(df_acc, x="lead_days", y="rain_prob_brier", markers=True,
                              title=f"Brier Score Regenwahrscheinlichkeit – {model} @ {city_label}")
@@ -298,8 +308,7 @@ try:
             st.plotly_chart(fig_da, width="stretch")
             st.caption(
                 "Directional Accuracy @50%: Anteil der Fälle, in denen p≥50% korrekt ein Regen-Ereignis (≥0.1 mm) vorhersagt "
-                "bzw. p<50% korrekt kein Ereignis. "
-                f"Zeitraum: {frm} bis {to}."
+                "bzw. p<50% korrekt kein Ereignis."
             )
 
         if "rain_prob_mae_pctpts" in df_acc.columns:
@@ -307,9 +316,7 @@ try:
                              title=f"MAE (%-Punkte) Regenwahrscheinlichkeit – {model} @ {city_label}")
             fig_pm.update_layout(xaxis_title="Lead (Tage)", yaxis_title="MAE (%-Punkte)")
             st.plotly_chart(fig_pm, width="stretch")
-            st.caption(
-                "Mittlerer absoluter Fehler in %-Punkten zwischen p und beobachtetem Ereignis (0/100)."
-            )
+            st.caption("Mittlerer absoluter Fehler in %-Punkten zwischen p und beobachtetem Ereignis (0/100).")
     else:
         st.info("Keine Accuracy-Daten im Zeitraum.")
 except Exception as e:
@@ -436,6 +443,81 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: tuple[float,float])
     styler = pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
     return styler
 
+# --- NEU: Pivot für Regenwahrscheinlichkeit (%)
+def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: tuple[float, float], event_threshold_mm: float = RAIN_EVENT_THRESHOLD_MM):
+    """
+    Pivot der Regenwahrscheinlichkeit (%):
+    - Zelleninhalt: vorhergesagte PoP (%) je Lead
+    - Spalte 0: Beobachtung als 0/100 (Event aus rain_mm >= Schwelle)
+    - Färbung: Fehler in %-Punkten vs. Spalte 0 (0/100)
+    """
+    if df_all.empty:
+        return pd.DataFrame()
+
+    cols = ["target_date", "lead_days", "rain_probability_pct", "rain_mm", "city"]
+    have = [c for c in cols if c in df_all.columns]
+    if not {"target_date", "lead_days", "city"}.issubset(have):
+        return pd.DataFrame()
+
+    d = df_all[have].copy()
+    d["neg_lead"] = d["lead_days"].apply(lambda x: -int(x))
+
+    # Beobachtetes Ereignis (0/100) aus Lead 0
+    obs = d[d["lead_days"] == 0].copy()
+    obs["event_0_100"] = np.where(obs["rain_mm"].fillna(0) >= event_threshold_mm, 100.0, 0.0)
+    obs_base = obs[["target_date", "city", "event_0_100"]].drop_duplicates()
+
+    # Pivot der vorhergesagten % (Lead -7..0)
+    index_cols = ["target_date"] if d["city"].nunique() == 1 else ["city", "target_date"]
+    pv = d.pivot_table(index=index_cols, columns="neg_lead", values="rain_probability_pct", aggfunc="first").sort_index()
+
+    # Spalten -7..0 sicherstellen
+    for col in range(-7, 1):
+        if col not in pv.columns:
+            pv[col] = np.nan
+    pv = pv[sorted(pv.columns)]
+
+    # Base-Event (0/100) in Spalte 0 setzen
+    if isinstance(pv.index, pd.MultiIndex):
+        base_join = obs_base.set_index(["city", "target_date"])
+    else:
+        base_join = obs_base.set_index("target_date")
+    base_series = base_join["event_0_100"].reindex(pv.index)
+    pv[0] = base_series  # Spalte 0 zeigt Beobachtung als 0/100
+
+    # Fehler in %-Punkten je Zelle vs. Base (0/100)
+    pv_err = pv.copy()
+    for c in pv.columns:
+        if c == 0:
+            pv_err[c] = np.nan
+        else:
+            pv_err[c] = (pv[c] - base_series).abs()
+
+    thr_g, thr_o = thresholds_pp
+    def colorize(err):
+        if pd.isna(err): return ""
+        if err <= thr_g: return "background-color: #e6f4ea"   # grün
+        if err <= thr_o: return "background-color: #fff4e5"   # orange
+        return "background-color: #fde8e8"                    # rot
+
+    styled = pv.copy()
+    for c in pv.columns:
+        if c == 0:
+            styled[c] = ""  # Beobachtung nicht färben
+        else:
+            styled[c] = pv_err[c].apply(colorize)
+
+    # Indexspalten für Anzeige herausführen
+    pv_show = pv.copy()
+    if isinstance(pv_show.index, pd.MultiIndex):
+        pv_show.insert(0, "city", [idx[0] for idx in pv_show.index])
+        pv_show.insert(1, "date", [str(idx[1]) for idx in pv_show.index])
+    else:
+        pv_show.insert(0, "date", pv_show.index.astype(str))
+
+    styler = pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
+    return styler
+
 try:
     if city == CITY_ALL_LABEL:
         frames = []
@@ -477,6 +559,18 @@ try:
         else:
             pvw.insert(0, "date", pvw.index.astype(str))
         st.dataframe(pvw, width="stretch")
+
+        # --- NEU: Pivot Regenwahrscheinlichkeit (%)
+        st.markdown(f"**Regenwahrscheinlichkeit (%) – {model} @ {city_label}**")
+        styler_prob = _build_pivot_prob(dfr, thresholds_prob)
+        if isinstance(styler_prob, pd.io.formats.style.Styler) or hasattr(styler_prob, "to_html"):
+            st.dataframe(styler_prob, width="stretch")
+        else:
+            st.dataframe(styler_prob, width="stretch")
+        st.caption(
+            f"Zellen = vorhergesagte % je Lead. Spalte 0 = beobachtetes Ereignis als 0/100 (Regen ≥ {RAIN_EVENT_THRESHOLD_MM} mm). "
+            "Färbung nach Fehler in %-Punkten vs. Spalte 0."
+        )
 except Exception as e:
     st.error(f"Fehler beim Erstellen der Tabellen: {e}")
 
