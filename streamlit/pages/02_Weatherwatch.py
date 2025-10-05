@@ -4,9 +4,9 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 from datetime import date, timedelta
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
-import io, calendar, shutil
+import io, base64, calendar, shutil
 from textwrap import dedent
 
 from api_client import (
@@ -16,10 +16,9 @@ from api_client import (
     delete_weather_logs,
 )
 
-import base64
-from streamlit import components
-
-
+# ────────────────────────────────────────────────────────────────────────────────
+# Page header
+# ────────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Weatherwatch – Model Verification", page_icon="⛅", layout="wide")
 st.title("⛅ Weatherwatch (Model Verification)")
 st.caption(
@@ -27,10 +26,10 @@ st.caption(
     "Temperatures use separate min/max. We also evaluate wind, precipitation, and probability of precipitation (PoP) with probabilistic metrics."
 )
 
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 # Constants
-# ---------------------------------
-KNOWN_MODELS = ["open-meteo", "metno", "wettercom", "default"]
+# ────────────────────────────────────────────────────────────────────────────────
+KNOWN_MODELS = ["open-meteo", "metno", "wettercom"]
 KNOWN_CITIES = [
     "berlin", "hamburg", "muenchen", "koeln", "frankfurt", "stuttgart",
     "duesseldorf", "dortmund", "essen", "leipzig", "bremen", "dresden",
@@ -46,29 +45,27 @@ NUM_VARS = {
     "rain_mm":    {"title": "Precipitation (mm)", "unit": "mm"},
 }
 
-# Traffic-light thresholds for absolute error |forecast − observation|
+# traffic-light thresholds for |forecast − observation|
 DEFAULT_THRESHOLDS = {
-    "temp_min_c": (1.0, 2.0),   # <= green, <= orange, else red
+    "temp_min_c": (1.0, 2.0),
     "temp_max_c": (1.0, 2.0),
     "wind_mps":   (0.6, 1.2),
     "rain_mm":    (0.5, 1.5),
 }
 
-# Probability of precipitation (PoP): thresholds for error in %-points vs. observed event 0/100
-DEFAULT_THRESHOLDS_PROB = (10.0, 25.0)  # <=10 green, <=25 orange, else red
-# Event definition for “rain observed”
+# PoP thresholds in %-points vs. 0/100 observed event
+DEFAULT_THRESHOLDS_PROB = (10.0, 25.0)
 RAIN_EVENT_THRESHOLD_MM = 0.1
 
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 # Cached loaders
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=30)
 def load_accuracy(frm: date, to: date, model: str, city: str, max_lead: int):
     return get_weather_accuracy(frm.isoformat(), to.isoformat(), model=model, city=city, max_lead=max_lead)
 
 @st.cache_data(ttl=30)
 def load_data_window(days_back: int, days_forward: int, model: str, city: str):
-    # include future so new forecasts appear immediately
     window_to = date.today() + timedelta(days=days_forward)
     window_from = date.today() - timedelta(days=days_back)
     return get_weather_data(
@@ -76,17 +73,11 @@ def load_data_window(days_back: int, days_forward: int, model: str, city: str):
         model=model, city=city, lead_days=None, limit=10000
     )
 
-
 @st.cache_data(ttl=300, show_spinner=False)
 def load_available_year_months(model: str, city: str) -> list[tuple[int,int]]:
-    """
-    Returns unique (year, month) pairs present in weather.data for the given model/city.
-    For city='ALL', union across KNOWN_CITIES.
-    """
-    # pull a wide window so we catch all historical data you care about
-    window_from = date(2020, 1, 1)  # adjust if you want
+    """Return unique (year, month) pairs present for model/city. For ALL, union across cities."""
+    window_from = date(2020, 1, 1)
     window_to   = date.today() + timedelta(days=7)
-
     frames = []
     if city == CITY_ALL_LABEL:
         for c in KNOWN_CITIES:
@@ -99,14 +90,11 @@ def load_available_year_months(model: str, city: str) -> list[tuple[int,int]]:
                                 model=model, city=city, lead_days=None, limit=100000)
         if rows:
             frames.append(pd.DataFrame(rows))
-
     if not frames:
         return []
-
     df = pd.concat(frames, ignore_index=True)
-    if "target_date" not in df.columns or df.empty:
+    if "target_date" not in df:
         return []
-
     dt = pd.to_datetime(df["target_date"], errors="coerce")
     ym = pd.DataFrame({"y": dt.dt.year, "m": dt.dt.month})
     pairs = (
@@ -117,10 +105,9 @@ def load_available_year_months(model: str, city: str) -> list[tuple[int,int]]:
     )
     return list(pairs.itertuples(index=False, name=None))
 
-
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 # Controls
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 colA, colB, colC, colD = st.columns([1,1,1,1])
 with colA:
     days_back = st.slider("Time window (days back)", 7, 180, 35)
@@ -137,12 +124,12 @@ to = date.today()
 with st.sidebar:
     st.header("Color thresholds")
     st.caption("Thresholds used for cell colors in the pivot tables (absolute error vs. observation).")
-    thr_temp_g, thr_temp_o = st.slider("Temp (°C): green/orange", 0.0, 5.0, DEFAULT_THRESHOLDS["temp_min_c"][0]), \
-                             st.slider("Temp (°C): orange/red",   0.0, 6.0, DEFAULT_THRESHOLDS["temp_min_c"][1])
-    thr_wind_g, thr_wind_o = st.slider("Wind (m/s): green/orange", 0.0, 3.0, DEFAULT_THRESHOLDS["wind_mps"][0]), \
-                             st.slider("Wind (m/s): orange/red",   0.0, 4.0, DEFAULT_THRESHOLDS["wind_mps"][1])
-    thr_rain_g, thr_rain_o = st.slider("Precip (mm): green/orange", 0.0, 5.0, DEFAULT_THRESHOLDS["rain_mm"][0]), \
-                             st.slider("Precip (mm): orange/red",   0.0, 8.0, DEFAULT_THRESHOLDS["rain_mm"][1])
+    thr_temp_g = st.slider("Temp (°C): green/orange", 0.0, 5.0, DEFAULT_THRESHOLDS["temp_min_c"][0], key="thr_temp_g")
+    thr_temp_o = st.slider("Temp (°C): orange/red",   0.0, 6.0, DEFAULT_THRESHOLDS["temp_min_c"][1], key="thr_temp_o")
+    thr_wind_g = st.slider("Wind (m/s): green/orange", 0.0, 3.0, DEFAULT_THRESHOLDS["wind_mps"][0], key="thr_wind_g")
+    thr_wind_o = st.slider("Wind (m/s): orange/red",   0.0, 4.0, DEFAULT_THRESHOLDS["wind_mps"][1], key="thr_wind_o")
+    thr_rain_g = st.slider("Precip (mm): green/orange", 0.0, 5.0, DEFAULT_THRESHOLDS["rain_mm"][0], key="thr_rain_g")
+    thr_rain_o = st.slider("Precip (mm): orange/red",   0.0, 8.0, DEFAULT_THRESHOLDS["rain_mm"][1], key="thr_rain_o")
 
     thresholds = {
         "temp_min_c": (thr_temp_g, thr_temp_o),
@@ -151,17 +138,16 @@ with st.sidebar:
         "rain_mm":    (thr_rain_g, thr_rain_o),
     }
 
-    # PoP thresholds in %-points
-    thr_prob_g = st.slider("PoP error (%-points): green/orange", 0.0, 50.0, DEFAULT_THRESHOLDS_PROB[0])
-    thr_prob_o = st.slider("PoP error (%-points): orange/red",   0.0, 60.0, DEFAULT_THRESHOLDS_PROB[1])
+    thr_prob_g = st.slider("PoP error (%-points): green/orange", 0.0, 50.0, DEFAULT_THRESHOLDS_PROB[0], key="thr_prob_g")
+    thr_prob_o = st.slider("PoP error (%-points): orange/red",   0.0, 60.0, DEFAULT_THRESHOLDS_PROB[1], key="thr_prob_o")
     thresholds_prob = (thr_prob_g, thr_prob_o)
 
 if st.button("🔄 Refresh"):
     load_accuracy.clear(); load_data_window.clear(); st.rerun()
 
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 # Caption helpers (transparent reporting)
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 def list_leads_used(series: pd.Series) -> str:
     leads = sorted([int(x) for x in series.tolist()])
     return ", ".join(str(x) for x in leads) if leads else "–"
@@ -197,23 +183,20 @@ def caption_bias(kind: str, df_bias: pd.DataFrame, model: str, city_lbl: str, fr
 def caption_pop_pivot(city_lbl: str):
     st.caption(
         f"Cells show forecast probability of precipitation (PoP, %). Column 0 shows the observed event as 0/100 (rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm). "
-        "Cell colors reflect absolute error in %-points vs. the observed 0/100. "
-        "This is a per-day, per-lead view (higher = wetter forecast)."
+        "Cell colors reflect absolute error in %-points vs. the observed 0/100."
     )
 
-# ---------------------------------
-# Aggregation across cities
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Aggregation helpers
+# ────────────────────────────────────────────────────────────────────────────────
 def weighted_merge_accuracy(acc_list: List[Dict]) -> pd.DataFrame:
-    """Merge multiple Accuracy bucket lists across cities with n-weighted averages."""
+    """Merge Accuracy buckets across cities with n-weighted averages."""
     if not acc_list:
         return pd.DataFrame()
     frames = []
     for acc in acc_list:
         b = (acc or {}).get("buckets", [])
-        if not b:
-            continue
-        frames.append(pd.DataFrame(b))
+        if b: frames.append(pd.DataFrame(b))
     if not frames:
         return pd.DataFrame()
     df_all = pd.concat(frames, ignore_index=True)
@@ -230,7 +213,6 @@ def weighted_merge_accuracy(acc_list: List[Dict]) -> pd.DataFrame:
             "wind_mae":     wavg(d.get("wind_mae"),     d["n"]),
             "rain_mae":     wavg(d.get("rain_mae"),     d["n"]),
             "weather_match_pct": wavg(d.get("weather_match_pct"), d["n"]),
-            # probabilistic metrics (n-weighted)
             "rain_prob_brier":        wavg(d.get("rain_prob_brier"), d["n"]),
             "rain_prob_diracc_pct":   wavg(d.get("rain_prob_diracc_pct"), d["n"]),
             "rain_prob_mae_pctpts":   wavg(d.get("rain_prob_mae_pctpts"), d["n"]),
@@ -239,15 +221,9 @@ def weighted_merge_accuracy(acc_list: List[Dict]) -> pd.DataFrame:
     return g
 
 def compute_bias_buckets_grouped(df: pd.DataFrame, max_lead: int) -> pd.DataFrame:
-    """
-    Bias aggregation over cities:
-      1) per city: join forecasts with same-day observation (lead 0),
-      2) per lead: compute mean signed error and n,
-      3) across cities: n-weighted mean per lead.
-    """
+    """Bias aggregation over cities (n-weighted)."""
     if df.empty:
         return pd.DataFrame({"lead_days": [], "n": []})
-
     rows = []
     for city_name, dcity in df.groupby("city"):
         obs = dcity[dcity["lead_days"] == 0].set_index("target_date")
@@ -290,9 +266,9 @@ def compute_bias_buckets_grouped(df: pd.DataFrame, max_lead: int) -> pd.DataFram
     ).reset_index(drop=True).sort_values("lead_days")
     return g
 
-# ---------------------------------
-# Accuracy (MAE + probabilistic)
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Accuracy
+# ────────────────────────────────────────────────────────────────────────────────
 st.subheader("Accuracy (MAE & Probabilistic)")
 try:
     if city == CITY_ALL_LABEL:
@@ -344,21 +320,21 @@ try:
         st.plotly_chart(fig_m, use_container_width=True)
         caption_weather_string(df_acc, model, city_label, frm, to)
 
-        # Probabilistic PoP metrics (if available from backend)
+        # PoP metrics if present
         if "rain_prob_brier" in df_acc.columns:
             fig_bs = px.line(df_acc, x="lead_days", y="rain_prob_brier", markers=True,
                              title=f"Brier score (PoP) • {model} @ {city_label}")
             fig_bs.update_layout(xaxis_title="Lead (days)", yaxis_title="Brier (lower is better)")
             st.plotly_chart(fig_bs, use_container_width=True)
-            st.caption(
-                "Brier score = mean squared error between forecast probability (0..1) and observed event (0/1, rain ≥ 0.1 mm)."
-            )
+            st.caption("Brier score = mean squared error between forecast probability (0..1) and observed event (0/1, rain ≥ 0.1 mm).")
+
         if "rain_prob_diracc_pct" in df_acc.columns:
             fig_da = px.bar(df_acc, x="lead_days", y="rain_prob_diracc_pct",
                             title=f"Directional accuracy @50% (PoP) • {model} @ {city_label}")
             fig_da.update_layout(xaxis_title="Lead (days)", yaxis_title="Hit rate (%)")
             st.plotly_chart(fig_da, use_container_width=True)
             st.caption("Share of cases where p≥50% correctly predicts an event, or p<50% correctly predicts no event.")
+
         if "rain_prob_mae_pctpts" in df_acc.columns:
             fig_pm = px.line(df_acc, x="lead_days", y="rain_prob_mae_pctpts", markers=True,
                              title=f"MAE in %-points (PoP vs. 0/100) • {model} @ {city_label}")
@@ -372,9 +348,9 @@ except Exception as e:
 
 st.divider()
 
-# ---------------------------------
-# Bias (signed error)
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Bias
+# ────────────────────────────────────────────────────────────────────────────────
 st.subheader("Bias (signed error: forecast − observation)")
 try:
     if city == CITY_ALL_LABEL:
@@ -429,37 +405,30 @@ except Exception as e:
 
 st.divider()
 
-# ---------------------------------
-# Pivot tables (Excel-style)
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Pivot helpers
+# ────────────────────────────────────────────────────────────────────────────────
 st.subheader("Pivot tables per variable (rows = dates, columns = leads −7…0)")
 
 def _lead_to_negcol(lead: int) -> int:
-    return -lead  # display as −7 … −1, 0
+    return -lead
 
-def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: tuple[float,float]):
-    """
-    City = single city: index = target_date.
-    City = ALL: index = (city, target_date) to avoid cross-mixing observations.
-    Columns: −7..0 (negative leads) – colored by absolute error vs. column 0 (observation).
-    """
+def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: Tuple[float,float]):
+    """Single-city or ALL(per-city rows) pivot with traffic-light coloring vs. obs (col 0)."""
     if df_all.empty:
         return pd.DataFrame()
 
     cols = ["target_date", "lead_days", var, "city"]
     df = df_all[cols].copy()
     df["neg_lead"] = df["lead_days"].apply(_lead_to_negcol)
-
     index_cols = ["target_date"] if df["city"].nunique() == 1 else ["city", "target_date"]
     pv = df.pivot_table(index=index_cols, columns="neg_lead", values=var, aggfunc="first").sort_index()
 
-    # ensure columns −7..0 exist
     for col in range(-7, 1):
         if col not in pv.columns:
             pv[col] = np.nan
     pv = pv[sorted(pv.columns)]
 
-    # absolute error vs. observation
     pv_err = pv.copy()
     base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
     for c in pv.columns:
@@ -468,15 +437,14 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: tuple[float,float])
     thr_g, thr_o = thresholds
     def colorize(err):
         if pd.isna(err): return ""
-        if err <= thr_g: return "background-color: #e6f4ea"   # green
-        if err <= thr_o: return "background-color: #fff4e5"   # orange
-        return "background-color: #fde8e8"                    # red
+        if err <= thr_g: return "background-color: #e6f4ea"
+        if err <= thr_o: return "background-color: #fff4e5"
+        return "background-color: #fde8e8"
 
     styled = pv.copy()
     for c in pv.columns:
         styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
 
-    # display index columns
     pv_show = pv.copy()
     if isinstance(pv_show.index, pd.MultiIndex):
         pv_show.insert(0, "city", [idx[0] for idx in pv_show.index])
@@ -487,28 +455,63 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds: tuple[float,float])
     styler = pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
     return styler
 
-# Pivot for probability of precipitation (%)
-def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: tuple[float, float], event_threshold_mm: float = RAIN_EVENT_THRESHOLD_MM):
+def _build_pivot_ALL_aggregate(df_all: pd.DataFrame, var: str, thresholds: Tuple[float,float]):
     """
-    Pivot for probability of precipitation (PoP, %):
-      - cells: forecast PoP (%) by lead
-      - column 0: observed event as 0/100 (rain ≥ threshold)
-      - cell color: absolute error in %-points vs. observed 0/100
+    NEW: For City=ALL in the PDF when 'Aggregate' is chosen.
+    We average across cities for each (target_date, lead_days), then color vs. the averaged observation (lead=0).
     """
     if df_all.empty:
         return pd.DataFrame()
 
+    need = {"target_date","lead_days","city",var}
+    if not need.issubset(df_all.columns):
+        return pd.DataFrame()
+
+    d = df_all[list(need)].copy()
+    # mean across cities for each day & lead
+    g = d.groupby(["target_date","lead_days"], as_index=False)[var].mean()
+    g["neg_lead"] = -g["lead_days"].astype(int)
+    pv = g.pivot_table(index="target_date", columns="neg_lead", values=var, aggfunc="first").sort_index()
+
+    for col in range(-7, 1):
+        if col not in pv.columns:
+            pv[col] = np.nan
+    pv = pv[sorted(pv.columns)]
+
+    base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
+    pv_err = pv.copy()
+    for c in pv.columns:
+        pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
+
+    thr_g, thr_o = thresholds
+    def colorize(err):
+        if pd.isna(err): return ""
+        if err <= thr_g: return "background-color: #e6f4ea"
+        if err <= thr_o: return "background-color: #fff4e5"
+        return "background-color: #fde8e8"
+
+    styled = pv.copy()
+    for c in pv.columns:
+        styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
+
+    pv_show = pv.copy()
+    pv_show.insert(0, "date", pv_show.index.astype(str))
+    return pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
+
+def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
+    """Per-city PoP pivot with 0/100 obs column."""
+    if df_all.empty:
+        return pd.DataFrame()
     cols = ["target_date", "lead_days", "rain_probability_pct", "rain_mm", "city"]
     have = [c for c in cols if c in df_all.columns]
-    if not {"target_date", "lead_days", "city"}.issubset(have):
+    if not {"target_date","lead_days","city"}.issubset(have):
         return pd.DataFrame()
 
     d = df_all[have].copy()
-    d["neg_lead"] = d["lead_days"].apply(lambda x: -int(x))
+    d["neg_lead"] = -d["lead_days"].astype(int)
 
-    # observed event (0/100) from lead 0
     obs = d[d["lead_days"] == 0].copy()
-    obs["event_0_100"] = np.where(obs["rain_mm"].fillna(0) >= event_threshold_mm, 100.0, 0.0)
+    obs["event_0_100"] = np.where(obs["rain_mm"].fillna(0) >= RAIN_EVENT_THRESHOLD_MM, 100.0, 0.0)
     obs_base = obs[["target_date", "city", "event_0_100"]].drop_duplicates()
 
     index_cols = ["target_date"] if d["city"].nunique() == 1 else ["city", "target_date"]
@@ -519,7 +522,6 @@ def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: tuple[float, float], 
             pv[col] = np.nan
     pv = pv[sorted(pv.columns)]
 
-    # set column 0 to observed 0/100
     if isinstance(pv.index, pd.MultiIndex):
         base_join = obs_base.set_index(["city", "target_date"])
     else:
@@ -527,7 +529,6 @@ def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: tuple[float, float], 
     base_series = base_join["event_0_100"].reindex(pv.index)
     pv[0] = base_series
 
-    # error in %-points vs. base
     pv_err = pv.copy()
     for c in pv.columns:
         pv_err[c] = np.nan if c == 0 else (pv[c] - base_series).abs()
@@ -550,10 +551,58 @@ def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: tuple[float, float], 
     else:
         pv_show.insert(0, "date", pv_show.index.astype(str))
 
-    styler = pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
-    return styler
+    return pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
 
-# ---- Render pivots ----
+def _build_pivot_prob_ALL_aggregate(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
+    """
+    NEW: Aggregate PoP pivot for ALL cities.
+    Values: mean PoP across cities for each lead/day.
+    Base col 0: fraction of cities with event (≥threshold mm)*100.
+    """
+    if df_all.empty or "rain_probability_pct" not in df_all.columns:
+        return pd.DataFrame()
+    need = {"target_date","lead_days","city","rain_probability_pct","rain_mm"}
+    if not need.issubset(df_all.columns):
+        return pd.DataFrame()
+
+    d = df_all[list(need)].copy()
+    # mean PoP per day/lead across cities
+    g = d.groupby(["target_date","lead_days"], as_index=False)["rain_probability_pct"].mean()
+    g["neg_lead"] = -g["lead_days"].astype(int)
+    pv = g.pivot_table(index="target_date", columns="neg_lead", values="rain_probability_pct", aggfunc="first").sort_index()
+
+    # base: fraction of cities with event * 100
+    ev = d[d["lead_days"] == 0].copy()
+    ev["event_0_100"] = (ev["rain_mm"].fillna(0) >= RAIN_EVENT_THRESHOLD_MM).astype(float) * 100.0
+    base_series = ev.groupby("target_date")["event_0_100"].mean()
+    pv[0] = base_series.reindex(pv.index)
+
+    for col in range(-7, 1):
+        if col not in pv.columns:
+            pv[col] = np.nan
+    pv = pv[sorted(pv.columns)]
+
+    base = pv[0]
+    pv_err = pv.copy()
+    for c in pv.columns:
+        pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
+
+    thr_g, thr_o = thresholds_pp
+    def colorize(err):
+        if pd.isna(err): return ""
+        if err <= thr_g: return "background-color: #e6f4ea"
+        if err <= thr_o: return "background-color: #fff4e5"
+        return "background-color: #fde8e8"
+
+    styled = pv.copy()
+    for c in pv.columns:
+        styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
+
+    pv_show = pv.copy()
+    pv_show.insert(0, "date", pv_show.index.astype(str))
+    return pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
+
+# ── Render pivot tables in the UI ───────────────────────────────────────────────
 try:
     if city == CITY_ALL_LABEL:
         frames = []
@@ -601,9 +650,9 @@ try:
 except Exception as e:
     st.error(f"Error creating tables: {e}")
 
-# ---------------------------------
-# Raw data (for inspection)
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Raw data (inspection)
+# ────────────────────────────────────────────────────────────────────────────────
 st.divider()
 with st.expander("Raw data (for inspection)"):
     try:
@@ -627,9 +676,9 @@ with st.expander("Raw data (for inspection)"):
     except Exception as e:
         st.error(f"Error loading raw data: {e}")
 
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 # Logs
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("Logs (weather.log)")
 if "show_weather_logs" not in st.session_state:
@@ -660,16 +709,14 @@ if st.session_state.show_weather_logs:
     except Exception as e:
         st.error(f"Error loading logs: {e}")
 
-# ---------------------------------
-# Methodology & Data Notes (for publication)
-# ---------------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Methodology & Data Notes
+# ────────────────────────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("Methodology & Data Notes")
 
 with st.container():
-    # Try to compute simple counts for transparency
     try:
-        # reuse df_acc / df_bias / dfr if present
         acc_pairs = int(df_acc.get("n", pd.Series(dtype=float)).fillna(0).sum()) if "df_acc" in locals() else None
     except Exception:
         acc_pairs = None
@@ -689,20 +736,21 @@ with st.container():
         f"**Accuracy pairs (lead≥1 vs. lead=0):** {acc_pairs if acc_pairs is not None else 'n/a'}.",
         f"**Bias pairs (per-lead n, n-weighted across cities):** {bias_pairs if bias_pairs is not None else 'n/a'}.",
         f"**Raw rows shown in pivots:** {raw_rows if raw_rows is not None else 'n/a'}.",
-        f"**Observation definition for rain events:** rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm ⇒ event = 1 (100%), else 0.",
+        f"**Rain event definition:** rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm ⇒ event = 1 (100%), else 0.",
         "**PoP evaluation:** Brier score (lower is better), directional accuracy @50%, and MAE in percentage points vs. observed 0/100.",
-        "**Pivot coloring:** By absolute error vs. observation (for PoP: vs. 0/100 event). Thresholds can be adjusted in the sidebar.",
+        "**Pivot coloring:** By absolute error vs. observation (for PoP: vs. 0/100 event). Thresholds can be adjusted in the sidebar and are applied in the PDF.",
         "**Data sources:** Open-Meteo API (daily aggregates), MET Norway / Yr API (hourly → daily aggregates), and wetter.com (HTML, 7-day page). "
         "Scraping of wetter.com is for testing/private purposes only; please respect their ToS and robots.txt.",
-        "**ETL cadence:** Forecasts (lead 0..7) are upserted daily per model and city. When multiple runs occur in a day, the latest run overwrites earlier ones for the same target date/lead.",
-        "**Limitations:** Different providers define daily maxima/minima and PoP differently; wind is max 10-m wind (m/s) as provided/approximated by each source; precipitation sums are daily totals.",
+        "**ETL cadence:** Forecasts (lead 0..7) are upserted daily per model and city; later runs overwrite earlier ones for the same target date/lead.",
     ]
     for b in bullets:
         st.markdown(f"- {b}")
 
-
+# ────────────────────────────────────────────────────────────────────────────────
+# Monthly PDF report (pivot tables)
+# ────────────────────────────────────────────────────────────────────────────────
 try:
-    import pdfkit  # requires wkhtmltopdf installed in the image
+    import pdfkit  # needs wkhtmltopdf
     _WKHTMLTOPDF = shutil.which("wkhtmltopdf") is not None
 except Exception:
     pdfkit = None
@@ -722,23 +770,29 @@ with col_m2:
                                    if city in KNOWN_CITIES or city==CITY_ALL_LABEL else 1,
                             key="pdf_city")
 
-# compute available (year, month) pairs for this selection
-pairs = load_available_year_months(rep_model, rep_city)
+# When ALL cities: choose how to render in the PDF
+agg_mode = "Aggregate (mean across cities)" if rep_city == CITY_ALL_LABEL else "Single city"
+if rep_city == CITY_ALL_LABEL:
+    agg_mode = st.radio(
+        "Report mode for ALL cities",
+        ["Aggregate (mean across cities)", "Per-city breakdown"],
+        horizontal=True,
+        index=0,
+        key="pdf_mode"
+    )
 
+# available months for this selection
+pairs = load_available_year_months(rep_model, rep_city)
 if not pairs:
     st.info("No target dates available for this model/city. Adjust your selection.")
     st.stop()
 
 years = sorted({y for y, _ in pairs})
-# default to the latest year present
 default_year = years[-1]
 
 col_y, col_m = st.columns([1,1])
 with col_y:
-    rep_year = st.selectbox("Year", options=years,
-                            index=years.index(default_year), key="pdf_year")
-
-# restrict months to those that exist for the chosen year
+    rep_year = st.selectbox("Year", options=years, index=years.index(default_year), key="pdf_year")
 months_for_year = sorted([m for (y, m) in pairs if y == rep_year])
 month_label_map = {m: calendar.month_name[m] for m in months_for_year}
 with col_m:
@@ -746,13 +800,12 @@ with col_m:
         "Month",
         options=months_for_year,
         format_func=lambda m: month_label_map.get(m, str(m)),
-        index=len(months_for_year)-1,  # default to latest available month in that year
+        index=len(months_for_year)-1,
         key="pdf_month"
     )
 
 st.caption(
-    f"Available months are derived from existing target dates in the database "
-    f"for **{rep_model}** / **{rep_city}**."
+    f"Available months are derived from existing target dates in the database for **{rep_model}** / **{rep_city}**."
 )
 
 def _month_window(y: int, m: int):
@@ -761,76 +814,45 @@ def _month_window(y: int, m: int):
     return first, last
 
 def _df_for_month(model_: str, city_: str, y: int, m: int) -> pd.DataFrame:
-    # fetch a slightly larger window so leads are available around the month borders
-    frm, to = _month_window(y, m)
-    # Just use your existing loader (it calls /weather/data)
-    # extend forward by 7 days so observation rows exist around the end
+    frm_m, to_m = _month_window(y, m)
     rows = []
     if city_ == CITY_ALL_LABEL:
         for c in KNOWN_CITIES:
-            r = get_weather_data(frm.isoformat(), to.isoformat(), model=model_, city=c, lead_days=None, limit=10000)
+            r = get_weather_data(frm_m.isoformat(), to_m.isoformat(), model=model_, city=c, lead_days=None, limit=10000)
             if r: rows.extend(r)
     else:
-        rows = get_weather_data(frm.isoformat(), to.isoformat(), model=model_, city=city_, lead_days=None, limit=10000)
+        rows = get_weather_data(frm_m.isoformat(), to_m.isoformat(), model=model_, city=city_, lead_days=None, limit=10000)
     df = pd.DataFrame(rows or [])
     if df.empty:
         return df
     df["target_date"] = pd.to_datetime(df["target_date"]).dt.date
-    # keep only rows whose target_date is inside the month (lead columns cover −7…0 automatically)
-    month_first, month_last = _month_window(y, m)
-    return df[(df["target_date"] >= month_first) & (df["target_date"] <= month_last)].copy()
+    return df
 
 def _styler_html(styler: "pd.io.formats.style.Styler") -> str:
-    """Render a pandas Styler (with cell styles) to plain HTML (no <style> duplication)."""
     try:
         return styler.to_html()
     except Exception:
-        # If anything goes wrong, fall back to plain DataFrame
         df = getattr(styler, "data", None)
         return (df if isinstance(df, pd.DataFrame) else pd.DataFrame()).to_html(index=True)
 
-def _pivot_html(df_all: pd.DataFrame, var: str, title: str, thresholds: tuple[float, float]) -> str:
-    styler = _build_pivot(df_all, var, thresholds)  # you already have this helper
+def _pivot_html(df_all: pd.DataFrame, var: str, title: str, thresholds_local: Tuple[float,float], aggregate_all: bool) -> str:
+    if aggregate_all:
+        styler = _build_pivot_ALL_aggregate(df_all, var, thresholds_local)
+    else:
+        styler = _build_pivot(df_all, var, thresholds_local)
     html = _styler_html(styler)
     return f"<h3>{title}</h3>\n{html}"
 
-def _pivot_weather_text_html(df_all: pd.DataFrame) -> str:
-    # like your “Aussichten (Wetter-String)” block but rendered to HTML
-    dfw = df_all[["target_date", "lead_days", "weather", "city"]].copy()
-    dfw["neg_lead"] = dfw["lead_days"].apply(_lead_to_negcol)
-    index_cols = ["target_date"] if dfw["city"].nunique() == 1 else ["city", "target_date"]
-    pvw = dfw.pivot_table(index=index_cols, columns="neg_lead", values="weather", aggfunc="first").sort_index()
-    for col in range(-7, 1):
-        if col not in pvw.columns: pvw[col] = np.nan
-    pvw = pvw[sorted(pvw.columns)]
-    if isinstance(pvw.index, pd.MultiIndex):
-        pvw.insert(0, "city", [idx[0] for idx in pvw.index])
-        pvw.insert(1, "date", [str(idx[1]) for idx in pvw.index])
-    else:
-        pvw.insert(0, "date", pvw.index.astype(str))
-    return "<h3>Outlook (weather text)</h3>\n" + pvw.to_html(index=False)
-
-def _pivot_rain_prob_html(df_all: pd.DataFrame) -> str:
-    # same logic as in your UI section
+def _pivot_rain_prob_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
     if "rain_probability_pct" not in df_all.columns:
         return ""
-    dfrp = df_all[["target_date","lead_days","rain_probability_pct","city"]].copy()
-    dfrp["neg_lead"] = dfrp["lead_days"].apply(_lead_to_negcol)
-    index_cols = ["target_date"] if dfrp["city"].nunique() == 1 else ["city", "target_date"]
-    p = dfrp.pivot_table(index=index_cols, columns="neg_lead", values="rain_probability_pct", aggfunc="first").sort_index()
-    for col in range(-7, 1):
-        if col not in p.columns: p[col] = np.nan
-    p = p[sorted(p.columns)]
-    if isinstance(p.index, pd.MultiIndex):
-        p.insert(0, "city", [idx[0] for idx in p.index])
-        p.insert(1, "date", [str(idx[1]) for idx in p.index])
+    if aggregate_all:
+        sty = _build_pivot_prob_ALL_aggregate(df_all, thresholds_prob)
     else:
-        p.insert(0, "date", p.index.astype(str))
-    # simple heat coloring via inline CSS with background gradient could be added; keep it simple for PDF
-    return "<h3>Rain probability (%)</h3>\n" + p.round(1).to_html(index=False)
+        sty = _build_pivot_prob(df_all, thresholds_prob)
+    return "<h3>Rain probability (%)</h3>\n" + _styler_html(sty)
 
-def _compose_report_html(df_month: pd.DataFrame, y: int, m: int, model_: str, city_: str) -> str:
-    # CSS for nicer tables in PDF
+def _compose_report_html(df_month: pd.DataFrame, y: int, m: int, model_: str, city_: str, aggregate_all: bool) -> str:
     css = dedent("""
     <style>
       body { font-family: Arial, sans-serif; margin: 18px; }
@@ -840,35 +862,37 @@ def _compose_report_html(df_month: pd.DataFrame, y: int, m: int, model_: str, ci
       table { border-collapse: collapse; width: 100%; font-size: 11px; }
       th, td { border: 1px solid #ddd; padding: 6px; }
       th { background: #f6f8fa; }
-      caption { caption-side: bottom; text-align: left; font-size: 10px; color: #666; padding-top: 4px; }
     </style>
     """)
     title = f"Weatherwatch – Monthly pivot report ({calendar.month_name[m]} {y})"
-    scope = f"Model: {model_} | City: {city_}"
-    # build blocks
-    blocks = []
-    blocks.append(_pivot_html(df_month, "temp_max_c", "Max temperature (°C)", thresholds["temp_max_c"]))
-    blocks.append(_pivot_html(df_month, "temp_min_c", "Min temperature (°C)", thresholds["temp_min_c"]))
-    blocks.append(_pivot_html(df_month, "wind_mps", "Wind (m/s)", thresholds["wind_mps"]))
-    blocks.append(_pivot_html(df_month, "rain_mm", "Precipitation (mm)", thresholds["rain_mm"]))
-    # weather text & probability (if present)
-    blocks.append(_pivot_weather_text_html(df_month))
-    blocks.append(_pivot_rain_prob_html(df_month))
+    scope = f"Model: {model_} | City: {city_}" + (" (AGGREGATE)" if aggregate_all and city_ == CITY_ALL_LABEL else "")
 
-    # transparency footer
+    blocks = []
+    blocks.append(_pivot_html(df_month, "temp_max_c", "Max temperature (°C)", thresholds["temp_max_c"], aggregate_all))
+    blocks.append(_pivot_html(df_month, "temp_min_c", "Min temperature (°C)", thresholds["temp_min_c"], aggregate_all))
+    blocks.append(_pivot_html(df_month, "wind_mps",   "Wind (m/s)",          thresholds["wind_mps"],   aggregate_all))
+    blocks.append(_pivot_html(df_month, "rain_mm",    "Precipitation (mm)",  thresholds["rain_mm"],    aggregate_all))
+    # Weather text aggregations are not well-defined across cities; omit for AGGREGATE to keep report crisp.
+    blocks.append(_pivot_rain_prob_html(df_month, aggregate_all))
+
     n_rows = len(df_month) if isinstance(df_month, pd.DataFrame) else 0
-    month_first, month_last = _month_window(y, m)
     notes = dedent(f"""
     <h2>Methodology & Notes</h2>
     <ul>
-      <li>Target dates limited to {month_first} → {month_last}. Leads shown as columns −7…0; column 0 are observations.</li>
-      <li>Color coding uses the thresholds you set in the app (green/orange/red against the observation in column 0).</li>
-      <li>Data source: your FastAPI endpoint <code>/api/weather/data</code>; models as labeled in the report title.</li>
-      <li>Total raw rows considered in this month window: {n_rows}.</li>
-      <li>Rain probability is shown in %, if supplied by the scraper for this model.</li>
+      <li>Target dates limited to {calendar.month_name[m]} {y}. Columns show leads −7…0; column 0 are observations.</li>
+      <li>Color thresholds (from UI) applied in this PDF:
+        <ul>
+          <li>Temp: {thresholds['temp_min_c'][0]}/{thresholds['temp_min_c'][1]} °C (green/orange • orange/red)</li>
+          <li>Wind: {thresholds['wind_mps'][0]}/{thresholds['wind_mps'][1]} m/s</li>
+          <li>Precip: {thresholds['rain_mm'][0]}/{thresholds['rain_mm'][1]} mm</li>
+          <li>PoP error: {thresholds_prob[0]}/{thresholds_prob[1]} %-points</li>
+        </ul>
+      </li>
+      <li>PoP base column is the observed event (rain ≥ {RAIN_EVENT_THRESHOLD_MM} mm) shown as 0 or 100; for ALL-aggregate it is the share of cities with an event (0..100).</li>
+      <li>Data source: your FastAPI endpoint <code>/api/weather/data</code>. Models as labeled above.</li>
+      <li>Total rows in this month window: {n_rows}.</li>
     </ul>
     """)
-
     html = f"<!doctype html><html><head><meta charset='utf-8'>{css}</head><body>"
     html += f"<h1>{title}</h1><h2>{scope}</h2>"
     html += "\n".join(blocks)
@@ -879,7 +903,6 @@ def _compose_report_html(df_month: pd.DataFrame, y: int, m: int, model_: str, ci
 def _make_pdf(html: str) -> bytes:
     if not (pdfkit and _WKHTMLTOPDF):
         raise RuntimeError("wkhtmltopdf is not available in the container.")
-    # basic options for A4 portrait; tweak margins if you like
     options = {
         "page-size": "A4",
         "margin-top": "10mm",
@@ -889,11 +912,11 @@ def _make_pdf(html: str) -> bytes:
         "encoding": "UTF-8",
         "quiet": "",
     }
-    return pdfkit.from_string(html, False, options=options)  # returns bytes
+    return pdfkit.from_string(html, False, options=options)
 
 gen_col1, gen_col2 = st.columns([1,2])
 with gen_col1:
-    btn = st.button("📄 Generate monthly PDF (pivots)", type="primary")
+    btn = st.button("📄 Generate monthly PDF (pivots)", type="primary", key="btn_gen_pdf")
 
 if btn:
     try:
@@ -901,63 +924,27 @@ if btn:
         if df_month.empty:
             st.warning("No data for the selected month/model/city.")
         else:
-            html = _compose_report_html(df_month, rep_year, rep_month, rep_model, rep_city)
-            fname_base = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}".replace(" ", "_")
-
+            aggregate_flag = (rep_city == CITY_ALL_LABEL and agg_mode.startswith("Aggregate"))
+            html = _compose_report_html(df_month, rep_year, rep_month, rep_model, rep_city, aggregate_flag)
             if pdfkit and _WKHTMLTOPDF:
                 pdf_bytes = _make_pdf(html)
-                fname_pdf = f"{fname_base}.pdf"
-
-                # 1) Regular download button (will open browser save dialog)
-                st.download_button("⬇️ Download PDF", data=pdf_bytes, file_name=fname_pdf, mime="application/pdf")
-
-                # 2) “Open in new tab” link using a data: URL
+                fname_pdf = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}.pdf".replace(" ", "_")
+                st.download_button("⬇️ Download PDF", data=pdf_bytes, file_name=fname_pdf,
+                                   mime="application/pdf", key="dl_pdf_main")
+                # open in new tab
                 b64 = base64.b64encode(pdf_bytes).decode("ascii")
-                st.markdown(
-                    f'<a href="data:application/pdf;base64,{b64}" target="_blank">🔎 Open PDF in a new tab</a>',
-                    unsafe_allow_html=True,
-                )
-
-                # 3) Optional: inline preview (embed viewer right in the page)
+                pdf_url = f"data:application/pdf;base64,{b64}"
+                st.markdown(f"[🔎 Open PDF in a new tab]({pdf_url})", unsafe_allow_html=True)
+                # inline preview (falls back to new tab if blocked)
                 with st.expander("Preview PDF (inline)"):
-                    components.v1.html(
-                        f'<iframe src="data:application/pdf;base64,{b64}" '
-                        f'width="100%" height="900" style="border:none;"></iframe>',
-                        height=900,
-                    )
-
+                    st.markdown(f"<iframe src='{pdf_url}' width='100%' height='1000px' frameborder='0'></iframe>", unsafe_allow_html=True)
                 st.success("PDF generated.")
             else:
-                # Fallback: HTML download & open-in-new-tab if wkhtmltopdf is missing
                 st.info("wkhtmltopdf is not installed in the container. Offering HTML instead (you can print to PDF from your browser).")
-                html_bytes = html.encode("utf-8")
-                fname_html = f"{fname_base}.html"
-
-                st.download_button("⬇️ Download HTML", data=html_bytes, file_name=fname_html, mime="text/html")
-
-                b64_html = base64.b64encode(html_bytes).decode("ascii")
-                st.markdown(
-                    f'<a href="data:text/html;base64,{b64_html}" target="_blank">🔎 Open HTML in a new tab</a>',
-                    unsafe_allow_html=True,
-                )
-
-    except Exception as e:
-        st.error(f"PDF creation failed: {e}")
-    try:
-        df_month = _df_for_month(rep_model, rep_city, rep_year, rep_month)
-        if df_month.empty:
-            st.warning("No data for the selected month/model/city.")
-        else:
-            html = _compose_report_html(df_month, rep_year, rep_month, rep_model, rep_city)
-            if pdfkit and _WKHTMLTOPDF:
-                pdf_bytes = _make_pdf(html)
-                fname = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}.pdf".replace(" ", "_")
-                st.download_button("⬇️ Download PDF", data=pdf_bytes, file_name=fname, mime="application/pdf")
-                st.success("PDF generated.")
-            else:
-                # Fallback: offer the HTML to download if wkhtmltopdf is missing
-                st.info("wkhtmltopdf is not installed in the container. Offering HTML instead (you can print to PDF from your browser).")
-                fname = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}.html".replace(" ", "_")
-                st.download_button("⬇️ Download HTML", data=html.encode("utf-8"), file_name=fname, mime="text/html")
+                fname_html = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}.html".replace(" ", "_")
+                st.download_button("⬇️ Download HTML", data=html.encode("utf-8"), file_name=fname_html,
+                                   mime="text/html", key="dl_html_fallback")
+                with st.expander("Preview (HTML)"):
+                    st.components.v1.html(html, height=900, scrolling=True)
     except Exception as e:
         st.error(f"PDF creation failed: {e}")
