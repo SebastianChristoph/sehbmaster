@@ -6,6 +6,9 @@ import plotly.express as px
 from datetime import date, timedelta
 from typing import List, Dict
 
+import io, calendar, shutil
+from textwrap import dedent
+
 from api_client import (
     get_weather_accuracy,
     get_weather_data,
@@ -68,6 +71,48 @@ def load_data_window(days_back: int, days_forward: int, model: str, city: str):
         window_from.isoformat(), window_to.isoformat(),
         model=model, city=city, lead_days=None, limit=10000
     )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_available_year_months(model: str, city: str) -> list[tuple[int,int]]:
+    """
+    Returns unique (year, month) pairs present in weather.data for the given model/city.
+    For city='ALL', union across KNOWN_CITIES.
+    """
+    # pull a wide window so we catch all historical data you care about
+    window_from = date(2020, 1, 1)  # adjust if you want
+    window_to   = date.today() + timedelta(days=7)
+
+    frames = []
+    if city == CITY_ALL_LABEL:
+        for c in KNOWN_CITIES:
+            rows = get_weather_data(window_from.isoformat(), window_to.isoformat(),
+                                    model=model, city=c, lead_days=None, limit=100000)
+            if rows:
+                frames.append(pd.DataFrame(rows))
+    else:
+        rows = get_weather_data(window_from.isoformat(), window_to.isoformat(),
+                                model=model, city=city, lead_days=None, limit=100000)
+        if rows:
+            frames.append(pd.DataFrame(rows))
+
+    if not frames:
+        return []
+
+    df = pd.concat(frames, ignore_index=True)
+    if "target_date" not in df.columns or df.empty:
+        return []
+
+    dt = pd.to_datetime(df["target_date"], errors="coerce")
+    ym = pd.DataFrame({"y": dt.dt.year, "m": dt.dt.month})
+    pairs = (
+        ym.dropna()
+          .astype({"y":"int32","m":"int16"})
+          .drop_duplicates()
+          .sort_values(["y","m"])
+    )
+    return list(pairs.itertuples(index=False, name=None))
+
 
 # ---------------------------------
 # Controls
@@ -650,3 +695,217 @@ with st.container():
     ]
     for b in bullets:
         st.markdown(f"- {b}")
+
+
+try:
+    import pdfkit  # requires wkhtmltopdf installed in the image
+    _WKHTMLTOPDF = shutil.which("wkhtmltopdf") is not None
+except Exception:
+    pdfkit = None
+    _WKHTMLTOPDF = False
+
+st.divider()
+st.subheader("Monthly PDF report (pivot tables)")
+
+col_m1, col_m2 = st.columns([1,1])
+with col_m1:
+    rep_model = st.selectbox("Model", options=KNOWN_MODELS,
+                             index=KNOWN_MODELS.index(model) if model in KNOWN_MODELS else 0,
+                             key="pdf_model")
+with col_m2:
+    rep_city = st.selectbox("City", options=[CITY_ALL_LABEL] + KNOWN_CITIES,
+                            index=( [CITY_ALL_LABEL] + KNOWN_CITIES ).index(city)
+                                   if city in KNOWN_CITIES or city==CITY_ALL_LABEL else 1,
+                            key="pdf_city")
+
+# compute available (year, month) pairs for this selection
+pairs = load_available_year_months(rep_model, rep_city)
+
+if not pairs:
+    st.info("No target dates available for this model/city. Adjust your selection.")
+    st.stop()
+
+years = sorted({y for y, _ in pairs})
+# default to the latest year present
+default_year = years[-1]
+
+col_y, col_m = st.columns([1,1])
+with col_y:
+    rep_year = st.selectbox("Year", options=years,
+                            index=years.index(default_year), key="pdf_year")
+
+# restrict months to those that exist for the chosen year
+months_for_year = sorted([m for (y, m) in pairs if y == rep_year])
+month_label_map = {m: calendar.month_name[m] for m in months_for_year}
+with col_m:
+    rep_month = st.selectbox(
+        "Month",
+        options=months_for_year,
+        format_func=lambda m: month_label_map.get(m, str(m)),
+        index=len(months_for_year)-1,  # default to latest available month in that year
+        key="pdf_month"
+    )
+
+st.caption(
+    f"Available months are derived from existing target dates in the database "
+    f"for **{rep_model}** / **{rep_city}**."
+)
+
+def _month_window(y: int, m: int):
+    first = date(y, m, 1)
+    last = date(y, m, calendar.monthrange(y, m)[1])
+    return first, last
+
+def _df_for_month(model_: str, city_: str, y: int, m: int) -> pd.DataFrame:
+    # fetch a slightly larger window so leads are available around the month borders
+    frm, to = _month_window(y, m)
+    # Just use your existing loader (it calls /weather/data)
+    # extend forward by 7 days so observation rows exist around the end
+    rows = []
+    if city_ == CITY_ALL_LABEL:
+        for c in KNOWN_CITIES:
+            r = get_weather_data(frm.isoformat(), to.isoformat(), model=model_, city=c, lead_days=None, limit=10000)
+            if r: rows.extend(r)
+    else:
+        rows = get_weather_data(frm.isoformat(), to.isoformat(), model=model_, city=city_, lead_days=None, limit=10000)
+    df = pd.DataFrame(rows or [])
+    if df.empty:
+        return df
+    df["target_date"] = pd.to_datetime(df["target_date"]).dt.date
+    # keep only rows whose target_date is inside the month (lead columns cover −7…0 automatically)
+    month_first, month_last = _month_window(y, m)
+    return df[(df["target_date"] >= month_first) & (df["target_date"] <= month_last)].copy()
+
+def _styler_html(styler: "pd.io.formats.style.Styler") -> str:
+    """Render a pandas Styler (with cell styles) to plain HTML (no <style> duplication)."""
+    try:
+        return styler.to_html()
+    except Exception:
+        # If anything goes wrong, fall back to plain DataFrame
+        df = getattr(styler, "data", None)
+        return (df if isinstance(df, pd.DataFrame) else pd.DataFrame()).to_html(index=True)
+
+def _pivot_html(df_all: pd.DataFrame, var: str, title: str, thresholds: tuple[float, float]) -> str:
+    styler = _build_pivot(df_all, var, thresholds)  # you already have this helper
+    html = _styler_html(styler)
+    return f"<h3>{title}</h3>\n{html}"
+
+def _pivot_weather_text_html(df_all: pd.DataFrame) -> str:
+    # like your “Aussichten (Wetter-String)” block but rendered to HTML
+    dfw = df_all[["target_date", "lead_days", "weather", "city"]].copy()
+    dfw["neg_lead"] = dfw["lead_days"].apply(_lead_to_negcol)
+    index_cols = ["target_date"] if dfw["city"].nunique() == 1 else ["city", "target_date"]
+    pvw = dfw.pivot_table(index=index_cols, columns="neg_lead", values="weather", aggfunc="first").sort_index()
+    for col in range(-7, 1):
+        if col not in pvw.columns: pvw[col] = np.nan
+    pvw = pvw[sorted(pvw.columns)]
+    if isinstance(pvw.index, pd.MultiIndex):
+        pvw.insert(0, "city", [idx[0] for idx in pvw.index])
+        pvw.insert(1, "date", [str(idx[1]) for idx in pvw.index])
+    else:
+        pvw.insert(0, "date", pvw.index.astype(str))
+    return "<h3>Outlook (weather text)</h3>\n" + pvw.to_html(index=False)
+
+def _pivot_rain_prob_html(df_all: pd.DataFrame) -> str:
+    # same logic as in your UI section
+    if "rain_probability_pct" not in df_all.columns:
+        return ""
+    dfrp = df_all[["target_date","lead_days","rain_probability_pct","city"]].copy()
+    dfrp["neg_lead"] = dfrp["lead_days"].apply(_lead_to_negcol)
+    index_cols = ["target_date"] if dfrp["city"].nunique() == 1 else ["city", "target_date"]
+    p = dfrp.pivot_table(index=index_cols, columns="neg_lead", values="rain_probability_pct", aggfunc="first").sort_index()
+    for col in range(-7, 1):
+        if col not in p.columns: p[col] = np.nan
+    p = p[sorted(p.columns)]
+    if isinstance(p.index, pd.MultiIndex):
+        p.insert(0, "city", [idx[0] for idx in p.index])
+        p.insert(1, "date", [str(idx[1]) for idx in p.index])
+    else:
+        p.insert(0, "date", p.index.astype(str))
+    # simple heat coloring via inline CSS with background gradient could be added; keep it simple for PDF
+    return "<h3>Rain probability (%)</h3>\n" + p.round(1).to_html(index=False)
+
+def _compose_report_html(df_month: pd.DataFrame, y: int, m: int, model_: str, city_: str) -> str:
+    # CSS for nicer tables in PDF
+    css = dedent("""
+    <style>
+      body { font-family: Arial, sans-serif; margin: 18px; }
+      h1 { font-size: 20px; margin: 0 0 6px 0; }
+      h2 { font-size: 16px; margin: 18px 0 6px 0; }
+      h3 { font-size: 14px; margin: 14px 0 6px 0; }
+      table { border-collapse: collapse; width: 100%; font-size: 11px; }
+      th, td { border: 1px solid #ddd; padding: 6px; }
+      th { background: #f6f8fa; }
+      caption { caption-side: bottom; text-align: left; font-size: 10px; color: #666; padding-top: 4px; }
+    </style>
+    """)
+    title = f"Weatherwatch – Monthly pivot report ({calendar.month_name[m]} {y})"
+    scope = f"Model: {model_} | City: {city_}"
+    # build blocks
+    blocks = []
+    blocks.append(_pivot_html(df_month, "temp_max_c", "Max temperature (°C)", thresholds["temp_max_c"]))
+    blocks.append(_pivot_html(df_month, "temp_min_c", "Min temperature (°C)", thresholds["temp_min_c"]))
+    blocks.append(_pivot_html(df_month, "wind_mps", "Wind (m/s)", thresholds["wind_mps"]))
+    blocks.append(_pivot_html(df_month, "rain_mm", "Precipitation (mm)", thresholds["rain_mm"]))
+    # weather text & probability (if present)
+    blocks.append(_pivot_weather_text_html(df_month))
+    blocks.append(_pivot_rain_prob_html(df_month))
+
+    # transparency footer
+    n_rows = len(df_month) if isinstance(df_month, pd.DataFrame) else 0
+    month_first, month_last = _month_window(y, m)
+    notes = dedent(f"""
+    <h2>Methodology & Notes</h2>
+    <ul>
+      <li>Target dates limited to {month_first} → {month_last}. Leads shown as columns −7…0; column 0 are observations.</li>
+      <li>Color coding uses the thresholds you set in the app (green/orange/red against the observation in column 0).</li>
+      <li>Data source: your FastAPI endpoint <code>/api/weather/data</code>; models as labeled in the report title.</li>
+      <li>Total raw rows considered in this month window: {n_rows}.</li>
+      <li>Rain probability is shown in %, if supplied by the scraper for this model.</li>
+    </ul>
+    """)
+
+    html = f"<!doctype html><html><head><meta charset='utf-8'>{css}</head><body>"
+    html += f"<h1>{title}</h1><h2>{scope}</h2>"
+    html += "\n".join(blocks)
+    html += notes
+    html += "</body></html>"
+    return html
+
+def _make_pdf(html: str) -> bytes:
+    if not (pdfkit and _WKHTMLTOPDF):
+        raise RuntimeError("wkhtmltopdf is not available in the container.")
+    # basic options for A4 portrait; tweak margins if you like
+    options = {
+        "page-size": "A4",
+        "margin-top": "10mm",
+        "margin-bottom": "10mm",
+        "margin-left": "10mm",
+        "margin-right": "10mm",
+        "encoding": "UTF-8",
+        "quiet": "",
+    }
+    return pdfkit.from_string(html, False, options=options)  # returns bytes
+
+gen_col1, gen_col2 = st.columns([1,2])
+with gen_col1:
+    btn = st.button("📄 Generate monthly PDF (pivots)", type="primary")
+if btn:
+    try:
+        df_month = _df_for_month(rep_model, rep_city, rep_year, rep_month)
+        if df_month.empty:
+            st.warning("No data for the selected month/model/city.")
+        else:
+            html = _compose_report_html(df_month, rep_year, rep_month, rep_model, rep_city)
+            if pdfkit and _WKHTMLTOPDF:
+                pdf_bytes = _make_pdf(html)
+                fname = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}.pdf".replace(" ", "_")
+                st.download_button("⬇️ Download PDF", data=pdf_bytes, file_name=fname, mime="application/pdf")
+                st.success("PDF generated.")
+            else:
+                # Fallback: offer the HTML to download if wkhtmltopdf is missing
+                st.info("wkhtmltopdf is not installed in the container. Offering HTML instead (you can print to PDF from your browser).")
+                fname = f"Weatherwatch_{rep_model}_{rep_city}_{rep_year}-{rep_month:02d}.html".replace(" ", "_")
+                st.download_button("⬇️ Download HTML", data=html.encode("utf-8"), file_name=fname, mime="text/html")
+    except Exception as e:
+        st.error(f"PDF creation failed: {e}")
