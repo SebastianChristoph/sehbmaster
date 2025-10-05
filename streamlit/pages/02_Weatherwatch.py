@@ -309,74 +309,81 @@ def compute_overall_scores(df_all: pd.DataFrame,
                            thresholds_prob_in: Tuple[float, float],
                            weights_in: Dict[str, float]) -> pd.DataFrame:
     """
-    For each (city, target_date, lead_days) compute an overall score 0..100.
+    Für jedes (city, target_date, lead_days) einen Overall-Score 0..100.
     Subscores:
-      - Temp min/max, wind, rain_mm: use |forecast - obs|; scale by orange threshold.
-      - PoP: |p% - (obs event 0/100)|; scale by PoP orange threshold (percentage points).
-    Weights are normalized globally and re-normalized per row to the actually available subscores.
+      - Temp min/max, Wind, Regen(mm): |Forecast-Obs| → 0..100 (Skalierung mit orange-Schwelle).
+      - PoP: |p% − (Obs 0/100)| → 0..100 (Skalierung mit PoP-orange-Schwelle).
+    Gewichte werden global normalisiert und pro Zeile auf vorhandene Subscores re-normalisiert.
     """
     if df_all.empty:
-        return pd.DataFrame(columns=["city","target_date","lead_days","score_overall"])
+        return pd.DataFrame(columns=["city", "target_date", "lead_days", "score_overall"])
 
     have_prob = "rain_probability_pct" in df_all.columns
-    out_rows = []
+    out_rows: list[dict] = []
     w_norm = _normalize_weights(weights_in)
 
+    keep_obs = ["temp_min_c", "temp_max_c", "wind_mps", "rain_mm"]
+
     for city_name, dcity in df_all.groupby("city"):
+        # Obs anhängen und Index **resetten**, damit positionsbasiertes Zugreifen sicher ist
         obs = dcity[dcity["lead_days"] == 0].set_index("target_date")
-        # merge obs columns
-        keep_obs = ["temp_min_c","temp_max_c","wind_mps","rain_mm"]
         m = dcity.merge(
             obs[keep_obs],
             left_on="target_date", right_index=True, suffixes=("", "_obs")
-        )
+        ).reset_index(drop=True)
 
-        # observed event 0/100 for PoP base
+        if m.empty:
+            continue
+
+        # PoP-Eventbasis (0/100)
         event_base = np.where(m["rain_mm_obs"].fillna(0) >= RAIN_EVENT_THRESHOLD_MM, 100.0, 0.0)
 
-        # errors
+        # Fehler
         err_tmin = (m["temp_min_c"] - m["temp_min_c_obs"]).abs()
         err_tmax = (m["temp_max_c"] - m["temp_max_c_obs"]).abs()
         err_wind = (m["wind_mps"]   - m["wind_mps_obs"]).abs()
         err_rain = (m["rain_mm"]    - m["rain_mm_obs"]).abs()
-        if have_prob:
-            err_pop = (m["rain_probability_pct"] - event_base).abs()
-        else:
-            err_pop = pd.Series(np.nan, index=m.index)
+        err_pop  = (m["rain_probability_pct"] - event_base).abs() if have_prob else pd.Series(np.nan, index=m.index)
 
-        # subscores
+        # Subscores (Skalierung mit orange-Schwelle)
         s_tmin = err_tmin.apply(lambda e: _subscore(e, thresholds_in["temp_min_c"][1]))
         s_tmax = err_tmax.apply(lambda e: _subscore(e, thresholds_in["temp_max_c"][1]))
         s_wind = err_wind.apply(lambda e: _subscore(e, thresholds_in["wind_mps"][1]))
         s_rain = err_rain.apply(lambda e: _subscore(e, thresholds_in["rain_mm"][1]))
         s_pop  = err_pop.apply(lambda e: _subscore(e, thresholds_prob_in[1]))
 
-        # weighted combo (normalize to available components per row)
-        for i, row in m.iterrows():
+        # In Arrays umwandeln → positionsbasiertes Zugreifen
+        a_tmin = s_tmin.to_numpy()
+        a_tmax = s_tmax.to_numpy()
+        a_wind = s_wind.to_numpy()
+        a_rain = s_rain.to_numpy()
+        a_pop  = s_pop.to_numpy()
+
+        for pos, row in enumerate(m.itertuples(index=False)):
             subs = {
-                "w_tmax": s_tmax.iat[i],
-                "w_tmin": s_tmin.iat[i],
-                "w_pop":  s_pop.iat[i],
-                "w_rain": s_rain.iat[i],
-                "w_wind": s_wind.iat[i],
+                "w_tmax": a_tmax[pos],
+                "w_tmin": a_tmin[pos],
+                "w_pop":  a_pop[pos],
+                "w_rain": a_rain[pos],
+                "w_wind": a_wind[pos],
             }
+            # nur vorhandene Subscores berücksichtigen
             avail = {k: v for k, v in subs.items() if not pd.isna(v)}
             if not avail:
                 score = np.nan
             else:
-                # re-normalize weights to available components
+                # Gewichte auf vorhandene Komponenten re-normalisieren
                 w_av = {k: v for k, v in w_norm.items() if k in avail}
                 s = sum(w_av.values())
                 if s <= 0:
-                    # equal weights fallback
                     score = float(np.mean(list(avail.values())))
                 else:
                     score = float(sum(w_av[k] * avail[k] for k in avail) / s)
 
             out_rows.append({
                 "city": city_name,
-                "target_date": row["target_date"],
-                "lead_days": int(row["lead_days"]),
+                "target_date": getattr(row, "target_date"),
+                "lead_days": int(getattr(row, "lead_days")),
                 "score_overall": score,
             })
 
