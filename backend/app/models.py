@@ -82,3 +82,5 @@ class BildCorrection(Base):
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP"),
     )
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    

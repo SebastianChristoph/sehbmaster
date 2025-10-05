@@ -284,7 +284,6 @@ def delete_all_logs(_=Depends(require_api_key)):
     return
 
 
-
 @router.get("/corrections", response_model=list[BildCorrectionOut])
 def list_corrections(session: Session = Depends(get_db_session)):
     rows = (
@@ -301,7 +300,8 @@ def list_corrections(session: Session = Depends(get_db_session)):
             published=r.published,
             source_url=r.source_url,
             article_url=r.article_url,
-            created_at=r.created_at,   # <- wichtig
+            message=r.message,          # <- NEU
+            created_at=r.created_at,
         )
         for r in rows
     ]
@@ -315,16 +315,17 @@ def create_correction(payload: BildCorrectionIn, session: Session = Depends(get_
         published=payload.published,
         source_url=payload.source_url,
         article_url=payload.article_url,
+        message=payload.message,       # <- NEU
     )
     session.add(row)
     try:
         session.commit()
-    except Exception as e:
-        from sqlalchemy.exc import IntegrityError
+    except IntegrityError:
         session.rollback()
-        if isinstance(e, IntegrityError):
-            # schon vorhanden
-            raise HTTPException(status_code=409, detail="duplicate")
+        # bereits vorhanden (Unique-Constraint)
+        raise HTTPException(status_code=409, detail="duplicate")
+    except Exception:
+        session.rollback()
         raise
     session.refresh(row)
     return BildCorrectionOut(
@@ -333,8 +334,10 @@ def create_correction(payload: BildCorrectionIn, session: Session = Depends(get_
         published=row.published,
         source_url=row.source_url,
         article_url=row.article_url,
-        created_at=row.created_at,   # <- wichtig
+        message=row.message,           # <- NEU (Bugfix: row.message, nicht r.message)
+        created_at=row.created_at,
     )
+
 
 @router.delete("/corrections", status_code=204, dependencies=[Depends(require_api_key)])
 def delete_all_corrections(session: Session = Depends(get_db_session)) -> None:

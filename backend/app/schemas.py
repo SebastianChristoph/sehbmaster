@@ -64,6 +64,8 @@ class BildCorrectionIn(BaseModel):
     published: datetime
     source_url: str
     article_url: str | None = None
+    message: str | None = None    
 
 class BildCorrectionOut(BildCorrectionIn):
     created_at: datetime
+    
