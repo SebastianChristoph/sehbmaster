@@ -17,8 +17,14 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-    ports:
-      - "5432:5432"   # optional, nur wenn du extern drauf willst
+    # ❌ entferne diese Zeile:
+    # ports:
+    #   - "5432:5432"
+    # ✅ optional: nur intern sichtbar machen
+    expose:
+      - "5432"
+    networks:
+      - private
 
   backend:
     build:
@@ -34,7 +40,10 @@ services:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips="*"
     ports:
-      - "8000:8000"   # i.d.R. nicht nötig; Streamlit spricht intern mit backend:8000
+      - "8000:8000"
+    networks:
+      - private
+      - default
 
   web:
     build:
@@ -48,6 +57,13 @@ services:
       - backend
     ports:
       - "80:8501"
+    networks:
+      - default
 
 volumes:
   db_data:
+
+networks:
+  private:
+    driver: bridge
+    internal: true

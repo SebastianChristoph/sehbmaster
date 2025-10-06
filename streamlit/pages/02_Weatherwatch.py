@@ -145,7 +145,7 @@ with st.sidebar:
     st.caption("Give **points** per component (integers). Points are normalized to sum to 1 per row.")
 
     POINTS_MAX = 10
-    pts_max  = st.slider("Points: Temp MAX", 0, POINTS_MAX, 7, step=1)
+    pts_max  = st.slider("Points: Temp MAX", 0, POINTS_MAX, 3, step=1)
     pts_min  = st.slider("Points: Temp MIN", 0, POINTS_MAX, 3, step=1)
     pts_pop  = st.slider("Points: PoP (rain prob.)", 0, POINTS_MAX, 3, step=1)
     pts_rain = st.slider("Points: Precip (mm)", 0, POINTS_MAX, 1, step=1)
