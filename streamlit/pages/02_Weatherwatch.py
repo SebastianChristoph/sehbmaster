@@ -30,6 +30,23 @@ st.caption(
 # Constants
 # ────────────────────────────────────────────────────────────────────────────────
 KNOWN_MODELS = ["open-meteo", "metno", "wettercom", "default"]
+
+
+# Lead-day mapping per model (inclusive range 0..max)
+LEAD_MAP = {
+    "open-meteo": list(range(0, 8)),
+    "metno":      list(range(0, 8)),
+    "wettercom":  list(range(0, 7)),
+    "default":    list(range(0, 8)),
+}
+
+def allowed_leads_for_model(model: str) -> list[int]:
+    return LEAD_MAP.get(model, LEAD_MAP["default"])
+
+def allowed_neg_leads_for_model(model: str) -> list[int]:
+    # columns are negative to keep 0 at the right, like existing pivots
+    return sorted([-l for l in allowed_leads_for_model(model)], reverse=False)
+
 KNOWN_CITIES = [
     "berlin", "hamburg", "muenchen", "koeln", "frankfurt", "stuttgart",
     "duesseldorf", "dortmund", "essen", "leipzig", "bremen", "dresden",
@@ -558,6 +575,31 @@ st.divider()
 # ────────────────────────────────────────────────────────────────────────────────
 # Pivot helpers (incl. overall score)
 # ────────────────────────────────────────────────────────────────────────────────
+
+def aggregate_all_cities_pivot(df: pd.DataFrame, model: str, var: str) -> pd.DataFrame:
+    """Aggregate pivot across cities (mean) for ALL selection.
+    Returns a styled DataFrame similar to _build_pivot.
+    """
+    if df.empty:
+        return pd.DataFrame()
+    lead_cols = [int(c) for c in sorted(df['lead_days'].dropna().unique())]
+    allowed = set(allowed_leads_for_model(model))
+    lead_cols = [l for l in lead_cols if l in allowed]
+    if not lead_cols:
+        return pd.DataFrame()
+    # melt and average
+    use = df[['target_date','lead_days',var,'city']].copy()
+    use = use.dropna(subset=[var])
+    grp = (use.groupby(['target_date','lead_days'], as_index=False)[var].mean())
+    grp['neg_lead'] = -grp['lead_days'].astype(int)
+    pv = grp.pivot(index='target_date', columns='neg_lead', values=var).sort_index()
+    allowed_cols = set(allowed_neg_leads_for_model(model))
+    pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
+    pv_show = pv.copy()
+    pv_show.insert(0, 'date', pv_show.index.astype(str))
+    # simple numeric format
+    return pv_show.style.format(precision=2)
+
 st.subheader("Pivot tables per variable (rows = dates, columns = leads −7…0)")
 
 def _lead_to_negcol(lead: int) -> int:
@@ -572,7 +614,7 @@ def _build_colored_table_from_values(pv: pd.DataFrame, style_func) -> "pd.io.for
         pv_show.insert(0, "date", pv_show.index.astype(str))
     return pv_show.style.format(precision=2).apply(lambda _: pv.applymap(style_func), axis=None)
 
-def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float]):
+def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float], model: str):
     if df_all.empty:
         return pd.DataFrame()
     cols = ["target_date", "lead_days", var, "city"]
@@ -580,9 +622,9 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float
     df["neg_lead"] = df["lead_days"].apply(_lead_to_negcol)
     index_cols = ["target_date"] if df["city"].nunique() == 1 else ["city", "target_date"]
     pv = df.pivot_table(index=index_cols, columns="neg_lead", values=var, aggfunc="first").sort_index()
-    for col in range(-7, 1):
-        if col not in pv.columns: pv[col] = np.nan
-    pv = pv[sorted(pv.columns)]
+    # keep only allowed leads and only those actually present
+    allowed_cols = set(allowed_neg_leads_for_model(model))
+    pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
 
     base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
     pv_err = pv.copy()
@@ -608,7 +650,7 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float
         pv_show.insert(0, "date", pv_show.index.astype(str))
     return pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
 
-def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
+def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float], model: str):
     if df_all.empty:
         return pd.DataFrame()
     cols = ["target_date", "lead_days", "rain_probability_pct", "rain_mm", "city"]
@@ -663,6 +705,7 @@ def _build_pivot_prob_ALL_aggregate(
     df_all: pd.DataFrame,
     thresholds_pp: tuple[float, float],
     event_threshold_mm: float = RAIN_EVENT_THRESHOLD_MM,
+    model: str = "default",
 ):
     """PoP pivot aggregated across cities for ALL."""
     need = {"target_date", "lead_days", "city", "rain_probability_pct", "rain_mm"}
@@ -680,10 +723,8 @@ def _build_pivot_prob_ALL_aggregate(
     grp["neg_lead"] = -grp["lead_days"].astype(int)
     pv = grp.pivot(index="target_date", columns="neg_lead", values="pop_mean").sort_index()
 
-    for col in range(-7, 1):
-        if col not in pv.columns:
-            pv[col] = np.nan
-    pv = pv[sorted(pv.columns)]
+    allowed_cols = set(allowed_neg_leads_for_model(model))
+    pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
 
     obs = d[d["lead_days"] == 0].copy()
     obs["event_0_100"] = (obs["rain_mm"].fillna(0) >= event_threshold_mm).astype(float) * 100.0
@@ -770,7 +811,10 @@ try:
 
         for var in NUM_VARS.keys():
             st.markdown(f"**{NUM_VARS[var]['title']} • {model} @ {city_label}**")
-            styler = _build_pivot(dfr, var, thresholds[var])
+            if city == CITY_ALL_LABEL:
+                styler = aggregate_all_cities_pivot(dfr, model, var)
+            else:
+                styler = _build_pivot(dfr, var, thresholds[var], model)
             st.dataframe(styler, use_container_width=True)
 
         st.markdown(f"**Outlook (weather text) • {model} @ {city_label}**")
@@ -778,9 +822,8 @@ try:
         dfw["neg_lead"] = dfw["lead_days"].apply(_lead_to_negcol)
         index_cols = ["target_date"] if dfw["city"].nunique() == 1 else ["city", "target_date"]
         pvw = dfw.pivot_table(index=index_cols, columns="neg_lead", values="weather", aggfunc="first").sort_index()
-        for col in range(-7, 1):
-            if col not in pvw.columns: pvw[col] = np.nan
-        pvw = pvw[sorted(pvw.columns)]
+        allowed_cols = set(allowed_neg_leads_for_model(model))
+        pvw = pvw[[c for c in sorted(pvw.columns) if c in allowed_cols]]
         if isinstance(pvw.index, pd.MultiIndex):
             pvw.insert(0, "city", [idx[0] for idx in pvw.index])
             pvw.insert(1, "date", [str(idx[1]) for idx in pvw.index])
