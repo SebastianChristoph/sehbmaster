@@ -576,31 +576,42 @@ st.divider()
 # Pivot helpers (incl. overall score)
 # ────────────────────────────────────────────────────────────────────────────────
 
-def aggregate_all_cities_pivot(df: pd.DataFrame, model: str, var: str) -> pd.DataFrame:
-    """Aggregate pivot across cities (mean) for ALL selection.
-    Returns a styled DataFrame similar to _build_pivot.
-    """
+
+def aggregate_all_cities_pivot(df: pd.DataFrame, model: str, var: str, thresholds_v: Tuple[float,float]):
+    """Aggregate pivot across cities (mean) for ALL selection with coloring vs lead 0."""
     if df.empty:
         return pd.DataFrame()
-    lead_cols = [int(c) for c in sorted(df['lead_days'].dropna().unique())]
-    allowed = set(allowed_leads_for_model(model))
-    lead_cols = [l for l in lead_cols if l in allowed]
-    if not lead_cols:
-        return pd.DataFrame()
-    # melt and average
-    use = df[['target_date','lead_days',var,'city']].copy()
-    use = use.dropna(subset=[var])
-    grp = (use.groupby(['target_date','lead_days'], as_index=False)[var].mean())
+    d = df[['target_date','lead_days',var,'city']].copy()
+    d['target_date'] = pd.to_datetime(d['target_date'], errors='coerce').dt.date
+    d = d.dropna(subset=['target_date'])
+    d = d.dropna(subset=[var])
+    grp = d.groupby(['target_date','lead_days'], as_index=False)[var].mean()
     grp['neg_lead'] = -grp['lead_days'].astype(int)
     pv = grp.pivot(index='target_date', columns='neg_lead', values=var).sort_index()
+
     allowed_cols = set(allowed_neg_leads_for_model(model))
     pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
+
+    base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
+    pv_err = pv.copy()
+    for c in pv.columns:
+        pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
+
+    thr_g, thr_o = thresholds_v
+    def colorize(err):
+        if pd.isna(err): return ""
+        if err <= thr_g: return "background-color: #e6f4ea"
+        if err <= thr_o: return "background-color: #fff4e5"
+        return "background-color: #fde8e8"
+
+    styled = pv.copy()
+    for c in pv.columns:
+        styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
+
     pv_show = pv.copy()
     pv_show.insert(0, 'date', pv_show.index.astype(str))
-    # simple numeric format
-    return pv_show.style.format(precision=2)
+    return pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
 
-st.subheader("Pivot tables per variable (rows = dates, columns = leads −7…0)")
 
 def _lead_to_negcol(lead: int) -> int:
     return -lead
@@ -812,7 +823,7 @@ try:
         for var in NUM_VARS.keys():
             st.markdown(f"**{NUM_VARS[var]['title']} • {model} @ {city_label}**")
             if city == CITY_ALL_LABEL:
-                styler = aggregate_all_cities_pivot(dfr, model, var)
+                styler = aggregate_all_cities_pivot(dfr, model, var, thresholds[var])
             else:
                 styler = _build_pivot(dfr, var, thresholds[var], model)
             st.dataframe(styler, use_container_width=True)
@@ -833,7 +844,7 @@ try:
         st.caption("Cells show the forecast weather string at each lead; column 0 is the observation text of the day.")
 
         st.markdown(f"**Probability of precipitation (PoP, %) • {model} @ {city_label}**")
-        styler_prob = _build_pivot_prob(dfr, thresholds_prob)
+        styler_prob = _build_pivot_prob(dfr, thresholds_prob, model)
         st.dataframe(styler_prob, use_container_width=True)
         caption_pop_pivot(city_label)
 
@@ -1091,9 +1102,9 @@ def _pivot_rain_prob_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
     if "rain_probability_pct" not in df_all.columns:
         return ""
     if aggregate_all:
-        sty = _build_pivot_prob_ALL_aggregate(df_all, thresholds_prob)
+        sty = _build_pivot_prob_ALL_aggregate(df_all, thresholds_prob, model=model)
     else:
-        sty = _build_pivot_prob(df_all, thresholds_prob)
+        sty = _build_pivot_prob(df_all, thresholds_prob, model)
     return "<h3>Rain probability (%)</h3>\n" + _styler_html(sty)
 
 def _pivot_overall_score_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
