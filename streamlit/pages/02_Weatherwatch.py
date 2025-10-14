@@ -30,21 +30,6 @@ st.caption(
 # Constants
 # ────────────────────────────────────────────────────────────────────────────────
 KNOWN_MODELS = ["open-meteo", "metno", "wettercom", "default"]
-
-
-# Lead-day mapping per model
-LEAD_MAP = {
-    "open-meteo": list(range(0, 8)),
-    "metno":      list(range(0, 8)),
-    "wettercom":  list(range(0, 7)),
-    "default":    list(range(0, 8)),
-}
-def allowed_leads_for_model(model: str) -> list[int]:
-    return LEAD_MAP.get(model, LEAD_MAP["default"])
-def allowed_neg_leads_for_model(model: str) -> list[int]:
-    # negative column labels used in the pivots
-    return sorted([-l for l in allowed_leads_for_model(model)], reverse=False)
-
 KNOWN_CITIES = [
     "berlin", "hamburg", "muenchen", "koeln", "frankfurt", "stuttgart",
     "duesseldorf", "dortmund", "essen", "leipzig", "bremen", "dresden",
@@ -265,13 +250,6 @@ weights_cfg = {
 }
 weights_norm = _normalize_weights(weights_cfg)
 
-
-def _filter_allowed_leads(df: pd.DataFrame, model: str, col: str = "lead_days") -> pd.DataFrame:
-    if df is None or df.empty or col not in df.columns:
-        return df
-    allowed = set(allowed_leads_for_model(model))
-    return df[df[col].isin(allowed)].copy()
-
 # ────────────────────────────────────────────────────────────────────────────────
 # Aggregation helpers
 # ────────────────────────────────────────────────────────────────────────────────
@@ -462,16 +440,14 @@ try:
             fig_min = px.line(df_acc, x="lead_days", y="temp_min_mae", markers=True,
                               title=f"Temp MIN – MAE (°C) • {model} @ {city_label}")
             fig_min.update_layout(xaxis_title="Lead (days)", yaxis_title="MAE (°C)")
-            fig_min.update_xaxes(tickmode='array', tickvals=allowed_ticks)
-            st.plotly_chart(fig_min, width='stretch')
+            st.plotly_chart(fig_min, use_container_width=True)
             caption_mae("Temp MIN", df_acc, model, city_label, frm, to)
 
         with c2:
             fig_max = px.line(df_acc, x="lead_days", y="temp_max_mae", markers=True,
                               title=f"Temp MAX – MAE (°C) • {model} @ {city_label}")
             fig_max.update_layout(xaxis_title="Lead (days)", yaxis_title="MAE (°C)")
-            fig_max.update_xaxes(tickmode='array', tickvals=allowed_ticks)
-            st.plotly_chart(fig_max, width='stretch')
+            st.plotly_chart(fig_max, use_container_width=True)
             caption_mae("Temp MAX", df_acc, model, city_label, frm, to)
 
         c3, c4 = st.columns(2)
@@ -479,41 +455,41 @@ try:
             fig_w = px.line(df_acc, x="lead_days", y="wind_mae", markers=True,
                             title=f"Wind – MAE (m/s) • {model} @ {city_label}")
             fig_w.update_layout(xaxis_title="Lead (days)", yaxis_title="MAE (m/s)")
-            st.plotly_chart(fig_w, width='stretch')
+            st.plotly_chart(fig_w, use_container_width=True)
             caption_mae("Wind", df_acc, model, city_label, frm, to)
 
         with c4:
             fig_r = px.line(df_acc, x="lead_days", y="rain_mae", markers=True,
                             title=f"Precipitation – MAE (mm) • {model} @ {city_label}")
             fig_r.update_layout(xaxis_title="Lead (days)", yaxis_title="MAE (mm)")
-            st.plotly_chart(fig_r, width='stretch')
+            st.plotly_chart(fig_r, use_container_width=True)
             caption_mae("Precipitation", df_acc, model, city_label, frm, to)
 
         fig_m = px.bar(df_acc, x="lead_days", y="weather_match_pct",
                        title=f"Weather text: exact matches (%) • {model} @ {city_label}")
         fig_m.update_layout(xaxis_title="Lead (days)", yaxis_title="Match rate (%)")
-        st.plotly_chart(fig_m, width='stretch')
+        st.plotly_chart(fig_m, use_container_width=True)
         caption_weather_string(df_acc, model, city_label, frm, to)
 
         if "rain_prob_brier" in df_acc.columns:
             fig_bs = px.line(df_acc, x="lead_days", y="rain_prob_brier", markers=True,
                              title=f"Brier score (PoP) • {model} @ {city_label}")
             fig_bs.update_layout(xaxis_title="Lead (days)", yaxis_title="Brier (lower is better)")
-            st.plotly_chart(fig_bs, width='stretch')
+            st.plotly_chart(fig_bs, use_container_width=True)
             st.caption("Brier score = mean squared error between forecast probability (0..1) and observed event (0/1, rain ≥ 0.1 mm).")
 
         if "rain_prob_diracc_pct" in df_acc.columns:
             fig_da = px.bar(df_acc, x="lead_days", y="rain_prob_diracc_pct",
                             title=f"Directional accuracy @50% (PoP) • {model} @ {city_label}")
             fig_da.update_layout(xaxis_title="Lead (days)", yaxis_title="Hit rate (%)")
-            st.plotly_chart(fig_da, width='stretch')
+            st.plotly_chart(fig_da, use_container_width=True)
             st.caption("Share of cases where p≥50% correctly predicts an event, or p<50% correctly predicts no event.")
 
         if "rain_prob_mae_pctpts" in df_acc.columns:
             fig_pm = px.line(df_acc, x="lead_days", y="rain_prob_mae_pctpts", markers=True,
                              title=f"MAE in %-points (PoP vs. 0/100) • {model} @ {city_label}")
             fig_pm.update_layout(xaxis_title="Lead (days)", yaxis_title="MAE (percentage points)")
-            st.plotly_chart(fig_pm, width='stretch')
+            st.plotly_chart(fig_pm, use_container_width=True)
             st.caption("Mean absolute error in percentage points between forecast p and observed 0/100 event.")
     else:
         st.info("No accuracy data in the selected window.")
@@ -547,20 +523,17 @@ try:
 
         c1, c2 = st.columns(2)
         with c1:
-            _dfb = _filter_allowed_leads(df_bias, model)
             fig_bmin = px.line(df_bias, x="lead_days", y="temp_min_bias", markers=True,
                                title=f"Bias – Temp MIN (°C) • {model} @ {city_label}")
             fig_bmin.update_layout(xaxis_title="Lead (days)", yaxis_title="Bias (°C)")
-            fig_bmin.update_xaxes(tickmode='array', tickvals=allowed_ticks)
-            st.plotly_chart(fig_bmin, width='stretch')
+            st.plotly_chart(fig_bmin, use_container_width=True)
             caption_bias("Temp MIN", df_bias, model, city_label, frm, to)
 
         with c2:
             fig_bmax = px.line(df_bias, x="lead_days", y="temp_max_bias", markers=True,
                                title=f"Bias – Temp MAX (°C) • {model} @ {city_label}")
             fig_bmax.update_layout(xaxis_title="Lead (days)", yaxis_title="Bias (°C)")
-            fig_bmax.update_xaxes(tickmode='array', tickvals=allowed_ticks)
-            st.plotly_chart(fig_bmax, width='stretch')
+            st.plotly_chart(fig_bmax, use_container_width=True)
             caption_bias("Temp MAX", df_bias, model, city_label, frm, to)
 
         c3, c4 = st.columns(2)
@@ -568,14 +541,14 @@ try:
             fig_bwind = px.line(df_bias, x="lead_days", y="wind_bias", markers=True,
                                 title=f"Bias – Wind (m/s) • {model} @ {city_label}")
             fig_bwind.update_layout(xaxis_title="Lead (days)", yaxis_title="Bias (m/s)")
-            st.plotly_chart(fig_bwind, width='stretch')
+            st.plotly_chart(fig_bwind, use_container_width=True)
             caption_bias("Wind", df_bias, model, city_label, frm, to)
 
         with c4:
             fig_brain = px.line(df_bias, x="lead_days", y="rain_bias", markers=True,
                                 title=f"Bias – Precipitation (mm) • {model} @ {city_label}")
             fig_brain.update_layout(xaxis_title="Lead (days)", yaxis_title="Bias (mm)")
-            st.plotly_chart(fig_brain, width='stretch')
+            st.plotly_chart(fig_brain, use_container_width=True)
             caption_bias("Precipitation", df_bias, model, city_label, frm, to)
 except Exception as e:
     st.error(f"Error computing bias: {e}")
@@ -585,37 +558,6 @@ st.divider()
 # ────────────────────────────────────────────────────────────────────────────────
 # Pivot helpers (incl. overall score)
 # ────────────────────────────────────────────────────────────────────────────────
-
-def aggregate_all_cities_pivot(df_all: pd.DataFrame, model: str, var: str, thresholds_v: Tuple[float,float]) -> 'pd.io.formats.style.Styler':
-    if df_all.empty:
-        return pd.DataFrame()
-    d = df_all[['target_date','lead_days',var,'city']].copy()
-    d['target_date'] = pd.to_datetime(d['target_date'], errors='coerce').dt.date
-    d = d.dropna(subset=['target_date'])
-    d = d.dropna(subset=[var])
-    d = _filter_allowed_leads(d, model, 'lead_days')
-    grp = d.groupby(['target_date','lead_days'], as_index=False)[var].mean()
-    grp['neg_lead'] = -grp['lead_days'].astype(int)
-    pv = grp.pivot(index='target_date', columns='neg_lead', values=var).sort_index()
-    allowed_cols = set(allowed_neg_leads_for_model(model))
-    pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
-    base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
-    pv_err = pv.copy()
-    for c in pv.columns:
-        pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
-    thr_g, thr_o = thresholds_v
-    def colorize(err):
-        if pd.isna(err): return ''
-        if err <= thr_g: return 'background-color: #e6f4ea'
-        if err <= thr_o: return 'background-color: #fff4e5'
-        return 'background-color: #fde8e8'
-    styled = pv.copy()
-    for c in pv.columns:
-        styled[c] = '' if c == 0 else pv_err[c].apply(colorize)
-    show = pv.copy()
-    show.insert(0, 'date', show.index.astype(str))
-    return show.style.format(precision=1).apply(lambda _: styled, axis=None)
-
 st.subheader("Pivot tables per variable (rows = dates, columns = leads −7…0)")
 
 def _lead_to_negcol(lead: int) -> int:
@@ -630,7 +572,7 @@ def _build_colored_table_from_values(pv: pd.DataFrame, style_func) -> "pd.io.for
         pv_show.insert(0, "date", pv_show.index.astype(str))
     return pv_show.style.format(precision=2).apply(lambda _: pv.applymap(style_func), axis=None)
 
-def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float], model: str):
+def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float]):
     if df_all.empty:
         return pd.DataFrame()
     cols = ["target_date", "lead_days", var, "city"]
@@ -638,8 +580,9 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float
     df["neg_lead"] = df["lead_days"].apply(_lead_to_negcol)
     index_cols = ["target_date"] if df["city"].nunique() == 1 else ["city", "target_date"]
     pv = df.pivot_table(index=index_cols, columns="neg_lead", values=var, aggfunc="first").sort_index()
-    allowed_cols = set(allowed_neg_leads_for_model(model))
-    pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
+    for col in range(-7, 1):
+        if col not in pv.columns: pv[col] = np.nan
+    pv = pv[sorted(pv.columns)]
 
     base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
     pv_err = pv.copy()
@@ -665,7 +608,7 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float
         pv_show.insert(0, "date", pv_show.index.astype(str))
     return pv_show.style.format(precision=2).apply(lambda _: styled, axis=None)
 
-def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float], model: str):
+def _build_pivot_prob(df_all: pd.DataFrame, thresholds_pp: Tuple[float,float]):
     if df_all.empty:
         return pd.DataFrame()
     cols = ["target_date", "lead_days", "rain_probability_pct", "rain_mm", "city"]
@@ -720,7 +663,6 @@ def _build_pivot_prob_ALL_aggregate(
     df_all: pd.DataFrame,
     thresholds_pp: tuple[float, float],
     event_threshold_mm: float = RAIN_EVENT_THRESHOLD_MM,
-    model: str = 'default',
 ):
     """PoP pivot aggregated across cities for ALL."""
     need = {"target_date", "lead_days", "city", "rain_probability_pct", "rain_mm"}
@@ -737,8 +679,11 @@ def _build_pivot_prob_ALL_aggregate(
     )
     grp["neg_lead"] = -grp["lead_days"].astype(int)
     pv = grp.pivot(index="target_date", columns="neg_lead", values="pop_mean").sort_index()
-    allowed_cols = set(allowed_neg_leads_for_model(model))
-    pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
+
+    for col in range(-7, 1):
+        if col not in pv.columns:
+            pv[col] = np.nan
+    pv = pv[sorted(pv.columns)]
 
     obs = d[d["lead_days"] == 0].copy()
     obs["event_0_100"] = (obs["rain_mm"].fillna(0) >= event_threshold_mm).astype(float) * 100.0
@@ -825,37 +770,35 @@ try:
 
         for var in NUM_VARS.keys():
             st.markdown(f"**{NUM_VARS[var]['title']} • {model} @ {city_label}**")
-            if city == CITY_ALL_LABEL:
-                styler = aggregate_all_cities_pivot(dfr, model, var, thresholds[var])
-            else:
-                styler = _build_pivot(dfr, var, thresholds[var], model)
-            st.dataframe(styler, width='stretch')
+            styler = _build_pivot(dfr, var, thresholds[var])
+            st.dataframe(styler, use_container_width=True)
 
         st.markdown(f"**Outlook (weather text) • {model} @ {city_label}**")
         dfw = dfr[["target_date", "lead_days", "weather", "city"]].copy()
         dfw["neg_lead"] = dfw["lead_days"].apply(_lead_to_negcol)
         index_cols = ["target_date"] if dfw["city"].nunique() == 1 else ["city", "target_date"]
         pvw = dfw.pivot_table(index=index_cols, columns="neg_lead", values="weather", aggfunc="first").sort_index()
-        allowed_cols = set(allowed_neg_leads_for_model(model))
-        pvw = pvw[[c for c in sorted(pvw.columns) if c in allowed_cols]]
+        for col in range(-7, 1):
+            if col not in pvw.columns: pvw[col] = np.nan
+        pvw = pvw[sorted(pvw.columns)]
         if isinstance(pvw.index, pd.MultiIndex):
             pvw.insert(0, "city", [idx[0] for idx in pvw.index])
             pvw.insert(1, "date", [str(idx[1]) for idx in pvw.index])
         else:
             pvw.insert(0, "date", pvw.index.astype(str))
-        st.dataframe(pvw, width='stretch')
+        st.dataframe(pvw, use_container_width=True)
         st.caption("Cells show the forecast weather string at each lead; column 0 is the observation text of the day.")
 
         st.markdown(f"**Probability of precipitation (PoP, %) • {model} @ {city_label}**")
-        styler_prob = _build_pivot_prob(dfr, thresholds_prob, model)
-        st.dataframe(styler_prob, width='stretch')
+        styler_prob = _build_pivot_prob(dfr, thresholds_prob)
+        st.dataframe(styler_prob, use_container_width=True)
         caption_pop_pivot(city_label)
 
         # NEW: overall model score (weighted)
         st.markdown(f"**Overall model score (0–100, weighted) • {model} @ {city_label}**")
         df_scores = compute_overall_scores(dfr, thresholds, thresholds_prob, weights_norm)
         styler_score = _build_score_pivot(df_scores, score_thresholds)
-        st.dataframe(styler_score, width='stretch')
+        st.dataframe(styler_score, use_container_width=True)
         st.caption(
             f"Score = weighted combination of subscores (Temp MAX/MIN, PoP, Precip mm, Wind). "
             f"Each subscore maps absolute error to 0..100 using the orange thresholds as scale. "
@@ -885,7 +828,7 @@ with st.expander("Raw data (for inspection)"):
 
         if not dfr.empty:
             dfr = dfr.sort_values(["city", "target_date", "lead_days"], ascending=[True, True, False])
-            st.dataframe(dfr, width='stretch', hide_index=True)
+            st.dataframe(dfr, use_container_width=True, hide_index=True)
             st.caption(f"{len(dfr)} rows")
         else:
             st.info("No data in the current window. Check model/city or the time window.")
@@ -918,7 +861,7 @@ if st.session_state.show_weather_logs:
         dfl = pd.DataFrame(logs)
         if not dfl.empty:
             dfl["timestamp"] = pd.to_datetime(dfl["timestamp"], utc=True, errors="coerce")
-            st.dataframe(dfl, width='stretch', hide_index=True)
+            st.dataframe(dfl, use_container_width=True, hide_index=True)
             st.caption(f"{len(dfl)} log entries loaded.")
         else:
             st.info("No logs available.")
