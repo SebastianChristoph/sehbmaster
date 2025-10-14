@@ -32,19 +32,16 @@ st.caption(
 KNOWN_MODELS = ["open-meteo", "metno", "wettercom", "default"]
 
 
-# Lead-day mapping per model (inclusive range 0..max)
+# Lead-day mapping per model
 LEAD_MAP = {
     "open-meteo": list(range(0, 8)),
     "metno":      list(range(0, 8)),
     "wettercom":  list(range(0, 7)),
     "default":    list(range(0, 8)),
 }
-
 def allowed_leads_for_model(model: str) -> list[int]:
     return LEAD_MAP.get(model, LEAD_MAP["default"])
-
 def allowed_neg_leads_for_model(model: str) -> list[int]:
-    # columns are negative to keep 0 at the right, like existing pivots
     return sorted([-l for l in allowed_leads_for_model(model)], reverse=False)
 
 KNOWN_CITIES = [
@@ -457,6 +454,7 @@ try:
             fig_min = px.line(df_acc, x="lead_days", y="temp_min_mae", markers=True,
                               title=f"Temp MIN – MAE (°C) • {model} @ {city_label}")
             fig_min.update_layout(xaxis_title="Lead (days)", yaxis_title="MAE (°C)")
+            fig_min.update_xaxes(tickmode='array', tickvals=_allowed)
             st.plotly_chart(fig_min, use_container_width=True)
             caption_mae("Temp MIN", df_acc, model, city_label, frm, to)
 
@@ -464,6 +462,7 @@ try:
             fig_max = px.line(df_acc, x="lead_days", y="temp_max_mae", markers=True,
                               title=f"Temp MAX – MAE (°C) • {model} @ {city_label}")
             fig_max.update_layout(xaxis_title="Lead (days)", yaxis_title="MAE (°C)")
+            fig_max.update_xaxes(tickmode='array', tickvals=_allowed)
             st.plotly_chart(fig_max, use_container_width=True)
             caption_mae("Temp MAX", df_acc, model, city_label, frm, to)
 
@@ -576,7 +575,6 @@ st.divider()
 # Pivot helpers (incl. overall score)
 # ────────────────────────────────────────────────────────────────────────────────
 
-
 def aggregate_all_cities_pivot(df: pd.DataFrame, model: str, var: str, thresholds_v: Tuple[float,float]):
     """Aggregate pivot across cities (mean) for ALL selection with coloring vs lead 0."""
     if df.empty:
@@ -588,30 +586,26 @@ def aggregate_all_cities_pivot(df: pd.DataFrame, model: str, var: str, threshold
     grp = d.groupby(['target_date','lead_days'], as_index=False)[var].mean()
     grp['neg_lead'] = -grp['lead_days'].astype(int)
     pv = grp.pivot(index='target_date', columns='neg_lead', values=var).sort_index()
-
     allowed_cols = set(allowed_neg_leads_for_model(model))
     pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
-
     base = pv[0] if 0 in pv.columns else pd.Series(index=pv.index, dtype=float)
     pv_err = pv.copy()
     for c in pv.columns:
         pv_err[c] = np.nan if c == 0 else (pv[c] - base).abs()
-
     thr_g, thr_o = thresholds_v
     def colorize(err):
-        if pd.isna(err): return ""
-        if err <= thr_g: return "background-color: #e6f4ea"
-        if err <= thr_o: return "background-color: #fff4e5"
-        return "background-color: #fde8e8"
-
+        if pd.isna(err): return ''
+        if err <= thr_g: return 'background-color: #e6f4ea'
+        if err <= thr_o: return 'background-color: #fff4e5'
+        return 'background-color: #fde8e8'
     styled = pv.copy()
     for c in pv.columns:
-        styled[c] = "" if c == 0 else pv_err[c].apply(colorize)
-
+        styled[c] = '' if c == 0 else pv_err[c].apply(colorize)
     pv_show = pv.copy()
     pv_show.insert(0, 'date', pv_show.index.astype(str))
     return pv_show.style.format(precision=1).apply(lambda _: styled, axis=None)
 
+st.subheader("Pivot tables per variable (rows = dates, columns = leads −7…0)")
 
 def _lead_to_negcol(lead: int) -> int:
     return -lead
@@ -633,7 +627,6 @@ def _build_pivot(df_all: pd.DataFrame, var: str, thresholds_v: Tuple[float,float
     df["neg_lead"] = df["lead_days"].apply(_lead_to_negcol)
     index_cols = ["target_date"] if df["city"].nunique() == 1 else ["city", "target_date"]
     pv = df.pivot_table(index=index_cols, columns="neg_lead", values=var, aggfunc="first").sort_index()
-    # keep only allowed leads and only those actually present
     allowed_cols = set(allowed_neg_leads_for_model(model))
     pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
 
@@ -716,7 +709,7 @@ def _build_pivot_prob_ALL_aggregate(
     df_all: pd.DataFrame,
     thresholds_pp: tuple[float, float],
     event_threshold_mm: float = RAIN_EVENT_THRESHOLD_MM,
-    model: str = "default",
+    model: str = 'default',
 ):
     """PoP pivot aggregated across cities for ALL."""
     need = {"target_date", "lead_days", "city", "rain_probability_pct", "rain_mm"}
@@ -733,7 +726,6 @@ def _build_pivot_prob_ALL_aggregate(
     )
     grp["neg_lead"] = -grp["lead_days"].astype(int)
     pv = grp.pivot(index="target_date", columns="neg_lead", values="pop_mean").sort_index()
-
     allowed_cols = set(allowed_neg_leads_for_model(model))
     pv = pv[[c for c in sorted(pv.columns) if c in allowed_cols]]
 
@@ -822,7 +814,7 @@ try:
 
         for var in NUM_VARS.keys():
             st.markdown(f"**{NUM_VARS[var]['title']} • {model} @ {city_label}**")
-            if city == CITY_ALL_LABEL:
+            if dfr['city'].nunique() > 1:
                 styler = aggregate_all_cities_pivot(dfr, model, var, thresholds[var])
             else:
                 styler = _build_pivot(dfr, var, thresholds[var], model)
@@ -1102,9 +1094,9 @@ def _pivot_rain_prob_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
     if "rain_probability_pct" not in df_all.columns:
         return ""
     if aggregate_all:
-        sty = _build_pivot_prob_ALL_aggregate(df_all, thresholds_prob, model=model)
+        sty = _build_pivot_prob_ALL_aggregate(df_all, thresholds_prob)
     else:
-        sty = _build_pivot_prob(df_all, thresholds_prob, model)
+        sty = _build_pivot_prob(df_all, thresholds_prob)
     return "<h3>Rain probability (%)</h3>\n" + _styler_html(sty)
 
 def _pivot_overall_score_html(df_all: pd.DataFrame, aggregate_all: bool) -> str:
