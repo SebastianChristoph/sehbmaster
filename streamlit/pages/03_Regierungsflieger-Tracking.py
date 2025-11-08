@@ -87,9 +87,10 @@ def _refresh_all():
 
 # ====================== A) Gesichtete: Tabelle ======================
 
-st.subheader("Gesichtete Vorfälle")
-
 seen_rows = _load_incident_ids(seen=True)
+st.subheader("Gesichtete Vorfälle ({len(seen_rows)})")
+
+
 
 # Build table: we need links, so fetch detail for each id
 table_records: list[dict] = []
