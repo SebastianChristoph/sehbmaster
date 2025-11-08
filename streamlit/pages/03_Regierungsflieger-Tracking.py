@@ -14,6 +14,7 @@ from api_client import (
     delete_gov_incident,
     delete_gov_incident_article,
     ApiError,
+    wipe_gov,
 )
 
 st.set_page_config(page_title="Regierungsflieger-Tracking", page_icon="✈️", layout="wide")
