@@ -52,7 +52,7 @@ def patch_status(raspberry: str, *, status: Optional[str] = None, message: Optio
 
 # ==================== BILDWATCH ====================
 
-# Articles (unchanged)
+# Articles
 def get_bild_articles(limit: int = 500, offset: int = 0):
     r = requests.get(f"{API_BASE}/bild/articles", params={"limit": limit, "offset": offset}, timeout=10)
     return _json_or_raise(r)
@@ -73,11 +73,9 @@ def delete_bild_articles():
         raise ApiError(f"Fehler beim Löschen: {msg}")
 
 
-# --- Charts (NEU) ---
+# Charts
 def get_bild_category_counts(premium_only: bool = False):
-    """
-    Backend berechnet die Kategorie-Verteilung.
-    """
+    """Backend berechnet die Kategorie-Verteilung."""
     r = requests.get(
         f"{API_BASE}/bild/charts/category_counts",
         params={"premium_only": str(premium_only).lower()},
@@ -93,30 +91,18 @@ def get_bild_category_counts(premium_only: bool = False):
 
 
 def get_bild_hourly(days: int = 60):
-    """
-    Liefert {"snapshot_avg": [...], "new_avg": [...]} mit Stunden 0..23.
-    """
-    r = requests.get(
-        f"{API_BASE}/bild/charts/hourly",
-        params={"days": days},
-        timeout=10,
-    )
+    """Liefert {'snapshot_avg': [...], 'new_avg': [...]} mit Stunden 0..23."""
+    r = requests.get(f"{API_BASE}/bild/charts/hourly", params={"days": days}, timeout=10)
     return _json_or_raise(r)
 
 
 def get_bild_daily_conversions(days: int = 60):
-    """
-    Liefert [{"day":"YYYY-MM-DD","count":N}, ...]
-    """
-    r = requests.get(
-        f"{API_BASE}/bild/charts/daily_conversions",
-        params={"days": days},
-        timeout=10,
-    )
+    """Liefert [{'day':'YYYY-MM-DD','count':N}, ...]"""
+    r = requests.get(f"{API_BASE}/bild/charts/daily_conversions", params={"days": days}, timeout=10)
     return _json_or_raise(r)
 
 
-# ---- Raw Metrics (falls woanders benötigt) ----
+# Raw Metrics (falls woanders benötigt)
 def get_bild_metrics(time_from: Optional[str] = None, time_to: Optional[str] = None, limit: int = 5000):
     params: Dict[str, Any] = {}
     if time_from:
@@ -128,7 +114,7 @@ def get_bild_metrics(time_from: Optional[str] = None, time_to: Optional[str] = N
     return _json_or_raise(r)
 
 
-# ---- Logs ----
+# Logs
 def get_bild_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
     params = {"limit": limit, "offset": offset, "asc": str(asc).lower()}
     r = requests.get(f"{API_BASE}/bild/logs", params=params, timeout=10)
@@ -144,3 +130,73 @@ def delete_bild_logs():
         except Exception:
             msg = r.text
         raise ApiError(f"Fehler beim Löschen der Logs: {msg}")
+
+
+# Corrections (NEU)
+def get_bild_corrections():
+    """Liest alle gespeicherten Corrections (neueste zuerst per Backend-Order)."""
+    r = requests.get(f"{API_BASE}/bild/corrections", timeout=10)
+    return _json_or_raise(r)
+
+
+def post_bild_correction(payload: Dict[str, Any], api_key: Optional[str] = None):
+    """
+    Optional: Manuelles Anlegen (zum Testen).
+    payload keys: id, title, published (ISO-UTC), source_url, article_url
+    """
+    headers = {"Content-Type": "application/json"}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.post(f"{API_BASE}/bild/corrections", json=payload, headers=headers, timeout=10)
+    return _json_or_raise(r)
+
+
+def delete_bild_corrections():
+    """Löscht alle Corrections."""
+    api_key = os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.delete(f"{API_BASE}/bild/corrections", headers={"X-API-Key": api_key}, timeout=10)
+    if r.status_code not in (200, 204):
+        try:
+            msg = r.json()
+        except Exception:
+            msg = r.text
+        raise ApiError(f"Fehler beim Löschen der Corrections: {msg}")
+
+
+# ==================== WEATHERWATCH ====================
+
+def upsert_weather_data(payload: dict, api_key: str | None = None):
+    # payload MUSS jetzt city enthalten
+    headers = {"Content-Type": "application/json"}
+    if api_key is None:
+        api_key = os.getenv("INGEST_API_KEY", "dev-secret")
+    headers["X-API-Key"] = api_key
+    r = requests.post(f"{API_BASE}/weather/data", json=payload, headers=headers, timeout=10)
+    return _json_or_raise(r)
+
+def get_weather_data(date_from: str | None = None, date_to: str | None = None, model: str = "default", city: str = "berlin", lead_days: int | None = None, limit: int = 5000):
+    params = {"model": model, "city": city, "limit": limit}
+    if date_from: params["date_from"] = date_from
+    if date_to:   params["date_to"]   = date_to
+    if lead_days is not None: params["lead_days"] = lead_days
+    r = requests.get(f"{API_BASE}/weather/data", params=params, timeout=10)
+    return _json_or_raise(r)
+
+def get_weather_accuracy(date_from: str, date_to: str, model: str = "default", city: str = "berlin", max_lead: int = 7):
+    params = {"date_from": date_from, "date_to": date_to, "model": model, "city": city, "max_lead": max_lead}
+    r = requests.get(f"{API_BASE}/weather/accuracy", params=params, timeout=10)
+    return _json_or_raise(r)
+
+def get_weather_logs(limit: int = 1000, offset: int = 0, asc: bool = False):
+    params = {"limit": limit, "offset": offset, "asc": str(asc).lower()}
+    r = requests.get(f"{API_BASE}/weather/logs", params=params, timeout=10)
+    return _json_or_raise(r)
+
+def delete_weather_logs():
+    api_key = os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.delete(f"{API_BASE}/weather/logs", headers={"X-API-Key": api_key}, timeout=10)
+    if r.status_code not in (200, 204):
+        try:
+            msg = r.json()
+        except Exception:
+            msg = r.text
+        raise ApiError(f"Fehler beim Löschen der Weather-Logs: {msg}")
