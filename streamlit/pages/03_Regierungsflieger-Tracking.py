@@ -223,3 +223,21 @@ if submitted:
                 except ApiError as e:
                     # Falls Backend den Tages-Duplikat-Check hat, kommt hier die passende Meldung an
                     st.error(f"Anlegen fehlgeschlagen: {e}")
+st.divider()
+
+# ---------- 4) ⚠️ Datenbank leeren ----------
+st.subheader("⚠️ Datenbank leeren")
+st.caption("Löscht **alle** Regierungsflieger-Daten (Incidents + Artikel). Nicht rückgängig zu machen!")
+
+left, right = st.columns([1, 3])
+with left:
+    really = st.checkbox("Ja, alles löschen", value=False)
+with right:
+    if st.button("Datenbank löschen", type="secondary", disabled=not really):
+        try:
+            res = wipe_gov(confirm=True)
+            st.warning("Alle Daten gelöscht.")
+            st.json(res)
+            st.rerun()
+        except ApiError as e:
+            st.error(f"Wipe fehlgeschlagen: {e}")
