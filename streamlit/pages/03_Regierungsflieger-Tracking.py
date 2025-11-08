@@ -1,4 +1,4 @@
-# streamlit/pages/20_Regierungsflieger_Tracking.py
+# streamlit/pages/Regierungsflieger-Tracking.py
 import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -9,8 +9,7 @@ import streamlit as st
 from api_client import (
     get_gov_incidents,
     get_gov_incident_detail,
-    post_gov_incident,
-    post_gov_article,
+    post_gov_incident,   # nutzt jetzt params manual=true bei Bedarf
     patch_gov_incident_seen,
     delete_gov_incident,
     delete_gov_incident_article,
@@ -66,9 +65,9 @@ def _links_from_detail(detail: dict) -> list[str]:
             links.append(u)
     return links
 
+# Cache
 @st.cache_data(ttl=10)
 def _load_incident_ids(seen: bool | None) -> list[dict]:
-    # Backend liefert bereits chronologisch (occurred_at ASC, NULLS LAST)
     return get_gov_incidents(seen=seen, limit=500, offset=0)
 
 @st.cache_data(ttl=10)
@@ -84,6 +83,7 @@ def _refresh_all():
 seen_rows = _load_incident_ids(seen=True)
 st.subheader(f"Gesichtete Vorfälle ({len(seen_rows)})")
 
+# Tabelle (Datum | Titel | Quellen als •-getrennte Liste)
 table_records: list[dict] = []
 for r in seen_rows:
     det = _load_incident_detail(r["id"])
@@ -96,7 +96,7 @@ for r in seen_rows:
 
 if table_records:
     df_seen = pd.DataFrame(table_records, columns=["Datum", "Titel", "Quellen"])
-    st.dataframe(df_seen, hide_index=True, width="stretch")
+    st.dataframe(df_seen, use_container_width=True, hide_index=True)
 else:
     st.info("Keine **gesichteten** Vorfälle vorhanden.")
 
@@ -116,13 +116,14 @@ else:
         det = _load_incident_detail(r["id"])
         links = _links_from_detail(det)
         with st.expander(f"{r['headline']} • { _fmt_date_iso_to_de(r.get('occurred_at')) } • Quellen: {len(links)}", expanded=True):
+            # Links
             if links:
                 for u in links:
                     st.markdown(f"- {u}")
             else:
                 st.write("Keine Quellen vorhanden.")
 
-            # einzelne Artikel entfernen
+            # Auswahl einzelner Artikel zum Entfernen
             if det.get("articles"):
                 id_to_title = {a["id"]: a["title"] for a in det["articles"]}
                 article_choices = list(id_to_title.keys())
@@ -179,7 +180,7 @@ with st.form("manual_add"):
         placeholder="https://beispiel.de/artikel-1\nhttps://andere-quelle.de/meldung",
         height=140,
     )
-    submitted = st.form_submit_button("Anlegen")
+    submitted = st.form_submit_button("Anlegen (mit Tagesprüfung)")
 
 if submitted:
     if not headline.strip():
@@ -195,8 +196,8 @@ if submitted:
                 if not u:
                     continue
                 rows.append({
-                    "title": u,             # minimal: Titel = Link
-                    "source": _hostname(u), # Quelle = Hostname
+                    "title": u,                  # minimal: Titel = Link
+                    "source": _hostname(u),      # Quelle = Hostname
                     "link": u,
                     "published_at": None,
                 })
@@ -204,13 +205,8 @@ if submitted:
                 st.error("Bitte mindestens **einen Link** angeben.")
             else:
                 try:
-                    # WICHTIG: manual=True → Tages-Duplikat-Check im Backend
-                    created = post_gov_incident(
-                        headline=headline.strip(),
-                        occurred_at=iso,
-                        articles=rows,
-                        manual=True,
-                    )
+                    # Wichtig: manual=True, damit Backend auf Tag-Duplikat prüft
+                    created = post_gov_incident(headline=headline.strip(), occurred_at=iso, articles=rows, manual=True)
                     _refresh_all()
                     st.success(f"Vorfall angelegt (ID {created.get('id')}).")
                     st.rerun()
@@ -219,7 +215,7 @@ if submitted:
 
 st.divider()
 
-# ---------- D) ⚠️ Datenbank leeren ----------
+# ---------- 4) ⚠️ Datenbank leeren ----------
 st.subheader("⚠️ Datenbank leeren")
 st.caption("Löscht **alle** Regierungsflieger-Daten (Incidents + Artikel). Nicht rückgängig zu machen!")
 
