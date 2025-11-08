@@ -200,3 +200,64 @@ def delete_weather_logs():
         except Exception:
             msg = r.text
         raise ApiError(f"Fehler beim Löschen der Weather-Logs: {msg}")
+
+# ==================== GOVWATCH ====================
+
+def get_gov_incidents(seen: bool | None = None, limit: int = 500, offset: int = 0):
+    params = {"limit": limit, "offset": offset}
+    if seen is not None:
+        params["seen"] = str(seen).lower()
+    r = requests.get(f"{API_BASE}/gov/incidents", params=params, timeout=10)
+    return _json_or_raise(r)
+
+def get_gov_incident_detail(incident_id: int):
+    r = requests.get(f"{API_BASE}/gov/incidents/{incident_id}", timeout=10)
+    return _json_or_raise(r)
+
+def post_gov_incident(headline: str, occurred_at: str | None, articles: list[dict], api_key: str | None = None):
+    headers = {"Content-Type": "application/json"}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
+    payload = {"headline": headline, "occurred_at": occurred_at, "articles": articles}
+    r = requests.post(f"{API_BASE}/gov/incidents", json=payload, headers=headers, timeout=15)
+    return _json_or_raise(r)
+
+def post_gov_article(incident_id: int, title: str, source: str, link: str, published_at: str | None = None, api_key: str | None = None):
+    headers = {"Content-Type": "application/json"}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
+    payload = {"title": title, "source": source, "link": link, "published_at": published_at}
+    r = requests.post(f"{API_BASE}/gov/incidents/{incident_id}/articles", json=payload, headers=headers, timeout=10)
+    return _json_or_raise(r)
+
+def patch_gov_incident_seen(incident_id: int, seen: bool, api_key: str | None = None):
+    headers = {"Content-Type": "application/json"}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.patch(f"{API_BASE}/gov/incidents/{incident_id}/seen", params={"seen": str(seen).lower()}, headers=headers, timeout=10)
+    return r.json() if r.content else {"updated": 0}
+
+def delete_gov_incident(incident_id: int, api_key: str | None = None):
+    headers = {}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.delete(f"{API_BASE}/gov/incidents/{incident_id}", headers=headers, timeout=10)
+    if r.status_code not in (200, 204):
+        try:
+            msg = r.json()
+        except Exception:
+            msg = r.text
+        raise ApiError(f"Löschen fehlgeschlagen: {msg}")
+
+def delete_gov_incident_article(incident_id: int, article_id: int, api_key: str | None = None):
+    headers = {}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.delete(f"{API_BASE}/gov/incidents/{incident_id}/articles/{article_id}", headers=headers, timeout=10)
+    if r.status_code not in (200, 204):
+        try:
+            msg = r.json()
+        except Exception:
+            msg = r.text
+        raise ApiError(f"Artikel entfernen fehlgeschlagen: {msg}")
+
+def wipe_gov(confirm: bool, api_key: str | None = None):
+    headers = {}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
+    r = requests.delete(f"{API_BASE}/gov/wipe", params={"confirm": "yes" if confirm else "no"}, headers=headers, timeout=10)
+    return _json_or_raise(r)
