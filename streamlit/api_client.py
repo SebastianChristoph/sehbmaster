@@ -228,6 +228,18 @@ def post_gov_article(incident_id: int, title: str, source: str, link: str, publi
     r = requests.post(f"{API_BASE}/gov/incidents/{incident_id}/articles", json=payload, headers=headers, timeout=10)
     return _json_or_raise(r)
 
+def create_gov_incident(headline: str, articles: list[dict], api_key: str | None = None):
+    headers = {"Accept":"application/json","Content-Type":"application/json"}
+    headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY","dev-secret")
+    payload = {"headline": headline, "articles": articles}
+    r = requests.post(f"{API_BASE}/gov/incidents", json=payload, headers=headers, timeout=15)
+    if r.status_code not in (200,201):
+        try: msg = r.json()
+        except Exception: msg = r.text
+        raise ApiError(f"Fehler beim Anlegen: {r.status_code} {msg}")
+    return r.json()
+
+
 def patch_gov_incident_seen(incident_id: int, seen: bool, api_key: str | None = None):
     headers = {"Content-Type": "application/json"}
     headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")

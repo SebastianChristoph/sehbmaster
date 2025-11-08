@@ -1,327 +1,188 @@
-# backend/app/routes/gov.py
-from __future__ import annotations
-
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+# streamlit/pages/03_Regierungsflieger-Tracking.py
 import os
+import pandas as pd
+import streamlit as st
+import requests
+from datetime import datetime
+from typing import List, Dict, Any
 
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+# ---- vorhandene API-Client-Calls nutzen ----
+from api_client import (
+    get_gov_incidents,
+    get_gov_incident_detail,
+    patch_gov_incident_seen,
+    delete_gov_incident,
+    delete_gov_incident_article,
+)
 
-from ..db import get_session
+API_BASE = os.getenv("API_BASE", "http://backend:8000/api").rstrip("/")
+API_KEY  = os.getenv("INGEST_API_KEY", "dev-secret")
 
-router = APIRouter(prefix="/api/gov", tags=["gov"])
+st.set_page_config(page_title="Regierungsflieger-Tracking", page_icon="✈️", layout="wide")
+st.title("✈️ Regierungsflieger-Tracking")
+st.caption("Liste aller Pannen-Cluster (Incidents) aus der Datenbank. Oben: nur gesichtete. "
+           "Unten: ungesichtete prüfen, als gesichtet markieren, Links löschen. "
+           "Ganz unten: manuell neues Pannen-Cluster anlegen (ohne Datum).")
 
-API_KEY = os.getenv("INGEST_API_KEY", "dev-secret")
-SCHEMA = 'gov'  # eigenes Schema für diesen Scraper
+# ---------- kleine Helpers ----------
+def _fmt_date(iso: str | None) -> str:
+    if not iso:
+        return ""
+    try:
+        # "2025-11-08T10:00:00Z" / mit Offset
+        iso = iso.replace("Z", "+00:00")
+        d = datetime.fromisoformat(iso)
+        return d.strftime("%d.%m.%Y")
+    except Exception:
+        return ""
 
-# -----------------------------------------------------------------------------
-# Schema / Tabellen idempotent erstellen (ohne Alembic, Daten bleiben erhalten)
-# -----------------------------------------------------------------------------
-def ensure_gov_schema() -> None:
-    ddl = f"""
-    CREATE SCHEMA IF NOT EXISTS "{SCHEMA}";
-
-    CREATE TABLE IF NOT EXISTS "{SCHEMA}"."incidents" (
-        id           SERIAL PRIMARY KEY,
-        headline     TEXT NOT NULL,
-        occurred_at  TIMESTAMPTZ,
-        seen         BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS "{SCHEMA}"."incident_articles" (
-        id           SERIAL PRIMARY KEY,
-        incident_id  INTEGER NOT NULL REFERENCES "{SCHEMA}"."incidents"(id) ON DELETE CASCADE,
-        title        TEXT NOT NULL,
-        source       TEXT NOT NULL,
-        link         TEXT NOT NULL UNIQUE,
-        published_at TIMESTAMPTZ
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_gov_incidents_seen_created
-      ON "{SCHEMA}"."incidents"(seen, created_at DESC);
-
-    CREATE INDEX IF NOT EXISTS idx_gov_articles_incident
-      ON "{SCHEMA}"."incident_articles"(incident_id);
+def _post_new_incident(headline: str, links: List[str]) -> tuple[int, Any]:
     """
-    with get_session() as s:
-        s.execute(text(ddl))
-        s.commit()
-
-
-# -----------------------------------------------------------------------------
-# Security helper
-# -----------------------------------------------------------------------------
-def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-    return True
-
-
-# -----------------------------------------------------------------------------
-# DTOs (leichtgewichtig, ohne Pydantic-Klassen)
-# -----------------------------------------------------------------------------
-def _row_to_incident(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "id": row["id"],
-        "headline": row["headline"],
-        "occurred_at": (row["occurred_at"].isoformat() if row["occurred_at"] else None),
-        "seen": row["seen"],
-        "created_at": (row["created_at"].isoformat() if row["created_at"] else None),
-    }
-
-def _row_to_article(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "source": row["source"],
-        "link": row["link"],
-        "published_at": (row["published_at"].isoformat() if row["published_at"] else None),
-    }
-
-
-# -----------------------------------------------------------------------------
-# GET /incidents?seen=...
-#   Liste mit Article-Count (für kompakte Übersicht)
-# -----------------------------------------------------------------------------
-@router.get("/incidents")
-def list_incidents(
-    seen: Optional[bool] = Query(None),
-    limit: int = Query(200, ge=1, le=2000),
-    offset: int = Query(0, ge=0),
-):
-    sql = f"""
-    SELECT i.id, i.headline, i.occurred_at, i.seen, i.created_at,
-           COALESCE(a.cnt, 0) AS articles_count
-    FROM "{SCHEMA}"."incidents" i
-    LEFT JOIN (
-        SELECT incident_id, COUNT(*) AS cnt
-        FROM "{SCHEMA}"."incident_articles"
-        GROUP BY incident_id
-    ) a ON a.incident_id = i.id
-    {{where}}
-    ORDER BY i.created_at DESC
-    LIMIT :limit OFFSET :offset
+    Lokaler POST-Helper (falls du noch keinen create_* in api_client hast).
+    articles: wir setzen Titel=Link, Source='Manuell', published_at=None.
     """
-    where = ""
-    params = {"limit": limit, "offset": offset}
-    if seen is not None:
-        where = "WHERE i.seen = :seen"
-        params["seen"] = seen
+    url = f"{API_BASE}/gov/incidents"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-API-Key": API_KEY,
+    }
+    payload = {
+        "headline": headline,
+        # occurred_at weglassen (None) -> Backend kann selbst entscheiden
+        "articles": [{"title": u, "source": "Manuell", "link": u} for u in links if u.strip()],
+    }
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=15)
+        return r.status_code, (r.json() if r.headers.get("content-type","").startswith("application/json") else r.text)
+    except Exception as e:
+        return 0, str(e)
 
-    with get_session() as s:
-        rows = s.execute(text(sql.replace("{where}", where)), params).mappings().all()
-        return [
-            {
-                **_row_to_incident(r),
-                "articles_count": r["articles_count"],
-            }
-            for r in rows
-        ]
+# ============== Abschnitt 1: nur GESICHTETE Vorfälle (Tabelle) ==============
+st.subheader("Gesichtete Vorfälle")
 
+try:
+    seen_incidents = get_gov_incidents(seen=True, limit=500)  # nur seen=true
+except Exception as e:
+    seen_incidents = []
+    st.error(f"Fehler beim Laden (gesehen): {e}")
 
-# -----------------------------------------------------------------------------
-# GET /incidents/{id}  (Detail inkl. Artikel)
-# -----------------------------------------------------------------------------
-@router.get("/incidents/{incident_id}")
-def get_incident_detail(incident_id: int):
-    with get_session() as s:
-        row = s.execute(
-            text(f'SELECT * FROM "{SCHEMA}"."incidents" WHERE id = :id'),
-            {"id": incident_id},
-        ).mappings().first()
-        if not row:
-            raise HTTPException(status_code=404, detail="not found")
+rows_seen: List[Dict[str, Any]] = []
+for inc in seen_incidents or []:
+    # Detail laden, um Quellen/Links zu zeigen
+    det = {}
+    try:
+        det = get_gov_incident_detail(inc["id"])
+    except Exception:
+        det = {}
 
-        arts = s.execute(
-            text(f'''
-                SELECT * FROM "{SCHEMA}"."incident_articles"
-                WHERE incident_id = :id
-                ORDER BY COALESCE(published_at, 'epoch'::timestamptz) DESC, id DESC
-            '''),
-            {"id": incident_id},
-        ).mappings().all()
+    links = [a.get("link","") for a in det.get("articles", [])]
+    date_str = _fmt_date(inc.get("occurred_at") or inc.get("created_at"))
+    rows_seen.append({
+        "Datum": date_str,
+        "Titel": inc.get("headline",""),
+        "Quellen": "\n".join(links) if links else "",
+    })
 
-        return {
-            **_row_to_incident(row),
-            "articles": [_row_to_article(a) for a in arts],
-        }
+if rows_seen:
+    df_seen = pd.DataFrame(rows_seen)
+    st.dataframe(
+        df_seen,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Datum": st.column_config.TextColumn(width="small"),
+            "Titel": st.column_config.TextColumn(width="large"),
+            "Quellen": st.column_config.TextColumn(width="large"),
+        },
+    )
+else:
+    st.info("Keine gesichteten Vorfälle vorhanden.")
 
+st.markdown("---")
 
-# -----------------------------------------------------------------------------
-# POST /incidents    (mit Duplicate-Day-Check)
-#   Body: { headline, occurred_at?, articles?[] }
-#   - Wenn occurred_at gesetzt ist, prüfe: existiert an diesem Kalendertag bereits ein Incident?
-#     -> ja: 409 + Meldung
-# -----------------------------------------------------------------------------
-@router.post("/incidents", dependencies=[Depends(require_api_key)], status_code=201)
-def create_incident(payload: Dict[str, Any]):
-    headline = (payload.get("headline") or "").strip()
-    occurred_at = payload.get("occurred_at")
-    articles = payload.get("articles") or []
+# ============== Abschnitt 2: UNGESICHTETE sichten/aufräumen ==============
+st.subheader("Ungesichtete sichten")
 
-    if not headline:
-        raise HTTPException(status_code=400, detail="headline required")
+try:
+    unseen_incidents = get_gov_incidents(seen=False, limit=500)
+except Exception as e:
+    unseen_incidents = []
+    st.error(f"Fehler beim Laden (ungesichtet): {e}")
 
-    with get_session() as s:
-        # Duplicate-Day-Check (UTC-Tag; falls du Berlin-Tag willst, siehe Kommentar unten)
-        if occurred_at:
-            # Hinweis: erfolgt in UTC. Für Europe/Berlin stattdessen:
-            # WHERE (occurred_at AT TIME ZONE 'Europe/Berlin')::date = ( :occurred_at::timestamptz AT TIME ZONE 'Europe/Berlin')::date
-            exists = s.execute(
-                text(f'''
-                    SELECT 1
-                    FROM "{SCHEMA}"."incidents"
-                    WHERE occurred_at::date = (:ts)::date
-                    LIMIT 1
-                '''),
-                {"ts": occurred_at},
-            ).first()
-            if exists:
-                raise HTTPException(status_code=409, detail="Es existiert bereits eine Panne an diesem Tag")
+st.caption(f"Ungesichtet: {len(unseen_incidents or [])}")
 
-        ins = s.execute(
-            text(f'''
-                INSERT INTO "{SCHEMA}"."incidents"(headline, occurred_at)
-                VALUES (:headline, :occurred_at)
-                RETURNING *
-            '''),
-            {"headline": headline, "occurred_at": occurred_at},
-        ).mappings().first()
-        incident_id = ins["id"]
-
-        # optionale Artikel direkt anlegen
-        created_articles: List[Dict[str, Any]] = []
-        for a in articles:
-            title = (a.get("title") or "").strip()
-            source = (a.get("source") or "").strip()
-            link = (a.get("link") or "").strip()
-            pub = a.get("published_at")
-
-            if not (title and source and link):
-                continue
-
-            try:
-                row = s.execute(
-                    text(f'''
-                        INSERT INTO "{SCHEMA}"."incident_articles"
-                        (incident_id, title, source, link, published_at)
-                        VALUES (:iid, :title, :source, :link, :pub)
-                        RETURNING *
-                    '''),
-                    {"iid": incident_id, "title": title, "source": source, "link": link, "pub": pub},
-                ).mappings().first()
-                created_articles.append(_row_to_article(row))
-            except Exception:
-                # z.B. Unique-Verstoß auf link -> ignorieren
-                pass
-
-        s.commit()
-
-        return {
-            **_row_to_incident(ins),
-            "articles": created_articles,
-        }
-
-
-# -----------------------------------------------------------------------------
-# POST /incidents/{id}/articles
-# -----------------------------------------------------------------------------
-@router.post("/incidents/{incident_id}/articles", dependencies=[Depends(require_api_key)], status_code=201)
-def add_article(incident_id: int, payload: Dict[str, Any]):
-    title = (payload.get("title") or "").strip()
-    source = (payload.get("source") or "").strip()
-    link = (payload.get("link") or "").strip()
-    pub = payload.get("published_at")
-
-    if not (title and source and link):
-        raise HTTPException(status_code=400, detail="title, source, link required")
-
-    with get_session() as s:
-        inc = s.execute(
-            text(f'SELECT 1 FROM "{SCHEMA}"."incidents" WHERE id=:id'),
-            {"id": incident_id},
-        ).first()
-        if not inc:
-            raise HTTPException(status_code=404, detail="incident not found")
-
+if unseen_incidents:
+    for inc in unseen_incidents:
+        det = {}
         try:
-            row = s.execute(
-                text(f'''
-                    INSERT INTO "{SCHEMA}"."incident_articles"
-                    (incident_id, title, source, link, published_at)
-                    VALUES (:iid, :title, :source, :link, :pub)
-                    RETURNING *
-                '''),
-                {"iid": incident_id, "title": title, "source": source, "link": link, "pub": pub},
-            ).mappings().first()
-            s.commit()
-            return _row_to_article(row)
+            det = get_gov_incident_detail(inc["id"])
         except Exception as e:
-            # Prüfe Unique-Verletzung (link)
-            msg = str(e).lower()
-            if "unique" in msg and "link" in msg:
-                raise HTTPException(status_code=409, detail="duplicate link")
-            raise
+            st.warning(f"Details konnten nicht geladen werden (ID {inc['id']}): {e}")
+            continue
 
+        date_str = _fmt_date(inc.get("occurred_at") or inc.get("created_at"))
+        header = f"{inc.get('headline','(ohne Titel)')} • {date_str or 'ohne Datum'} • Quellen: {len(det.get('articles',[]))}"
+        with st.expander(header, expanded=False):
+            # Liste der Quellen
+            if det.get("articles"):
+                for art in det["articles"]:
+                    cols = st.columns([0.75, 0.15, 0.10])
+                    with cols[0]:
+                        st.write(f"- [{art.get('title') or art.get('link')}]({art.get('link')})")
+                    with cols[1]:
+                        st.caption(art.get("source") or "")
+                    with cols[2]:
+                        if st.button("Link entfernen", key=f"rm-{inc['id']}-{art['id']}", help="Entfernt diesen Artikel-Link aus dem Vorfall."):
+                            try:
+                                delete_gov_incident_article(inc["id"], art["id"])
+                                st.success("Link entfernt.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Fehler beim Entfernen: {e}")
+            else:
+                st.write("Keine Artikel verknüpft.")
 
-# -----------------------------------------------------------------------------
-# PATCH /incidents/{id}/seen?seen=true|false
-# -----------------------------------------------------------------------------
-@router.patch("/incidents/{incident_id}/seen")
-def set_seen(
-    incident_id: int,
-    seen: bool = Query(...),
-    _=Depends(require_api_key),
-):
-    with get_session() as s:
-        res = s.execute(
-            text(f'UPDATE "{SCHEMA}"."incidents" SET seen=:seen WHERE id=:id'),
-            {"seen": seen, "id": incident_id},
-        )
-        s.commit()
-        return {"updated": res.rowcount}
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Als gesichtet markieren", key=f"seen-{inc['id']}"):
+                    try:
+                        patch_gov_incident_seen(inc["id"], True)
+                        st.success("Vorfall als gesichtet markiert.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fehler: {e}")
+            with c2:
+                if st.button("Vorfall löschen", key=f"del-{inc['id']}", type="secondary"):
+                    try:
+                        delete_gov_incident(inc["id"])
+                        st.success("Vorfall gelöscht.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fehler: {e}")
+else:
+    st.info("Keine ungesichteten Vorfälle vorhanden.")
 
+st.markdown("---")
 
-# -----------------------------------------------------------------------------
-# DELETE /incidents/{id}
-# -----------------------------------------------------------------------------
-@router.delete("/incidents/{incident_id}", status_code=204, dependencies=[Depends(require_api_key)])
-def delete_incident(incident_id: int):
-    with get_session() as s:
-        s.execute(text(f'DELETE FROM "{SCHEMA}"."incidents" WHERE id=:id'), {"id": incident_id})
-        s.commit()
-    return
+# ============== Abschnitt 3: Manuell neues Pannen-Cluster hinzufügen ==============
+st.subheader("Manuell neues Pannen-Cluster hinzufügen")
 
+with st.form("manual_add"):
+    title = st.text_input("Titel des Pannen-Clusters", placeholder="z. B. Regierungsflieger mit Defekt – Außenminister muss umsteigen")
+    links_text = st.text_area("Quellen-Links (je Zeile ein Link)", height=120, placeholder="https://…\nhttps://…")
+    submitted = st.form_submit_button("Anlegen")
 
-# -----------------------------------------------------------------------------
-# DELETE /incidents/{id}/articles/{article_id}
-# -----------------------------------------------------------------------------
-@router.delete("/incidents/{incident_id}/articles/{article_id}", status_code=204, dependencies=[Depends(require_api_key)])
-def delete_article(incident_id: int, article_id: int):
-    with get_session() as s:
-        s.execute(
-            text(f'''
-                DELETE FROM "{SCHEMA}"."incident_articles"
-                WHERE id=:aid AND incident_id=:iid
-            '''),
-            {"aid": article_id, "iid": incident_id},
-        )
-        s.commit()
-    return
-
-
-# -----------------------------------------------------------------------------
-# ⚠️ DELETE /wipe?confirm=yes
-# -----------------------------------------------------------------------------
-@router.delete("/wipe")
-def wipe_all(confirm: str = Query(...), _=Depends(require_api_key)):
-    if confirm.lower() != "yes":
-        raise HTTPException(status_code=400, detail="set confirm=yes to wipe")
-    with get_session() as s:
-        s.execute(text(f'TRUNCATE TABLE "{SCHEMA}"."incident_articles" RESTART IDENTITY CASCADE'))
-        s.execute(text(f'TRUNCATE TABLE "{SCHEMA}"."incidents" RESTART IDENTITY CASCADE'))
-        s.commit()
-    return {"status": "wiped"}
+    if submitted:
+        links = [ln.strip() for ln in (links_text or "").splitlines() if ln.strip()]
+        if not title or not links:
+            st.error("Bitte Titel und mindestens einen Link angeben.")
+        else:
+            code, data = _post_new_incident(title, links)
+            if code in (200, 201):
+                st.success("Vorfall angelegt.")
+                st.rerun()
+            else:
+                # Backend kann z. B. zurückgeben: „Es existiert bereits eine Panne an diesem Tag“
+                msg = data if isinstance(data, str) else str(data)
+                st.error(f"Fehler ({code}): {msg[:400]}")
