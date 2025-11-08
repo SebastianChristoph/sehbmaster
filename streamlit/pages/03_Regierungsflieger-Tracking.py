@@ -6,7 +6,7 @@ from collections import Counter
 
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
+import plotly.express as px
 
 from api_client import (
     get_gov_incidents,
@@ -19,18 +19,20 @@ from api_client import (
     ApiError,
 )
 
-st.set_page_config(page_title="Government Aircraft – Tracking", page_icon="✈️", layout="wide")
-st.title("✈️ Government Aircraft – Tracking")
-
+# ---------------------------------------------------------------------
+# Page config
+# ---------------------------------------------------------------------
+st.set_page_config(page_title="Government Aircraft – Incident Tracking", page_icon="✈️", layout="wide")
+st.title("✈️ Government Aircraft – Incident Tracking")
 st.caption(
-    "Reviewed incidents are listed first (table). Below that, you can review unreviewed incidents "
-    "(mark reviewed, delete, or remove links). At the bottom you can add a manual incident and wipe the DB."
+    "Top: table of **seen** incidents. Below: **Review unreviewed** (mark as seen, delete incident, or remove links). "
+    "At the bottom you can **manually add** an incident and **wipe** the database if needed."
 )
 
-# -------------------- Helpers --------------------
-
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
 def _fmt_date_iso_to_de(iso: str | None) -> str:
-    """'YYYY-MM-DDTHH:MM:SSZ' -> 'dd.mm.yyyy' (empty if None/invalid)."""
     if not iso:
         return ""
     try:
@@ -42,13 +44,11 @@ def _fmt_date_iso_to_de(iso: str | None) -> str:
 
 def _iso_from_ddmmyyyy(s: str) -> str | None:
     """
-    Expect dd-mm-yyyy (with dashes). Return ISO 'YYYY-MM-DDT00:00:00Z' or None if invalid.
+    Convert 'dd-mm-yyyy' to ISO 'YYYY-MM-DDT00:00:00Z'
     """
     if not isinstance(s, str):
         return None
     s = s.strip()
-    if not s:
-        return None
     m = re.match(r"^(\d{2})-(\d{2})-(\d{4})$", s)
     if not m:
         return None
@@ -82,7 +82,9 @@ def _year_from_iso(iso: str | None) -> int | None:
     except Exception:
         return None
 
-# Small cache so we don't hammer the API on every rerun
+# ---------------------------------------------------------------------
+# Small caching to avoid hammering the API on each rerun
+# ---------------------------------------------------------------------
 @st.cache_data(ttl=10)
 def _load_incident_ids(seen: bool | None) -> list[dict]:
     return get_gov_incidents(seen=seen, limit=500, offset=0)
@@ -95,69 +97,58 @@ def _refresh_all():
     _load_incident_ids.clear()
     _load_incident_detail.clear()
 
-# ====================== A) Reviewed incidents (table) ======================
-
+# ---------------------------------------------------------------------
+# A) Seen incidents (table) + Bar chart “incidents per year”
+# ---------------------------------------------------------------------
 try:
     seen_rows = _load_incident_ids(seen=True)
 except ApiError as e:
     st.error(f"api_client.ApiError: {e}")
     st.stop()
 
-st.subheader(f"Reviewed incidents ({len(seen_rows)})")
+st.subheader(f"Seen incidents ({len(seen_rows)})")
 
 table_records: list[dict] = []
+years: list[int] = []
+
 for r in seen_rows:
-    try:
-        det = _load_incident_detail(r["id"])
-    except ApiError as e:
-        st.error(f"Failed to load incident #{r['id']}: {e}")
-        continue
+    det = _load_incident_detail(r["id"])
     links = _links_from_detail(det)
     table_records.append(
         {
             "Date": _fmt_date_iso_to_de(r.get("occurred_at")),
             "Title": r.get("headline", ""),
-            # use a single-line separator to render cleanly in dataframe cells
+            # join to keep single-line cells (newlines render poorly in DataFrame)
             "Sources": " • ".join(links) if links else "",
         }
     )
+    y = _year_from_iso(r.get("occurred_at"))
+    if y is not None:
+        years.append(y)
 
 if table_records:
     df_seen = pd.DataFrame(table_records, columns=["Date", "Title", "Sources"])
     st.dataframe(df_seen, use_container_width=True, hide_index=True)
 else:
-    st.info("No **reviewed** incidents yet.")
+    st.info("No **seen** incidents yet.")
 
-# --- Bar chart: incidents per year (based on ALL incidents) ---
-all_rows = _load_incident_ids(seen=None)
-year_counts = Counter()
-for r in all_rows:
-    y = _year_from_iso(r.get("occurred_at"))
-    if y:
-        year_counts[y] += 1
-
-if year_counts:
-    st.markdown("#### Incidents per year")
-    # Build a sorted series by year
-    years_sorted = sorted(year_counts.keys())
-    counts_sorted = [year_counts[y] for y in years_sorted]
-
-    fig, ax = plt.subplots(figsize=(7.5, 3.8))
-    ax.bar([str(y) for y in years_sorted], counts_sorted)
-    ax.set_xlabel("Year")
-    ax.set_ylabel("Incidents")
-    ax.set_title("Incidents per year")
-    # Rotate x labels if there are many years
-    if len(years_sorted) > 8:
-        for tick in ax.get_xticklabels():
-            tick.set_rotation(45)
-            tick.set_ha("right")
-    st.pyplot(fig)
+# ---- Bar chart: incidents per year (Plotly) ----
+st.markdown("#### Incidents per year")
+if years:
+    counts = Counter(years)
+    df_counts = pd.DataFrame({"Year": sorted(counts.keys()), "Incidents": [counts[y] for y in sorted(counts.keys())]})
+    fig = px.bar(df_counts, x="Year", y="Incidents", text="Incidents")
+    fig.update_traces(textposition="outside")
+    fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), xaxis_title=None, yaxis_title=None)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.write("No data available for the chart yet.")
 
 st.divider()
 
-# ====================== B) Review unreviewed ======================
-
+# ---------------------------------------------------------------------
+# B) Review unreviewed incidents
+# ---------------------------------------------------------------------
 st.subheader("Review unreviewed")
 
 try:
@@ -169,15 +160,10 @@ except ApiError as e:
 st.caption(f"{len(unseen_rows)} unreviewed incident(s)")
 
 if not unseen_rows:
-    st.success("There are currently no unreviewed incidents.")
+    st.success("No unreviewed incidents at the moment.")
 else:
     for r in unseen_rows:
-        try:
-            det = _load_incident_detail(r["id"])
-        except ApiError as e:
-            st.error(f"Failed to load incident #{r['id']}: {e}")
-            continue
-
+        det = _load_incident_detail(r["id"])
         links = _links_from_detail(det)
         with st.expander(
             f"{r['headline']} • { _fmt_date_iso_to_de(r.get('occurred_at')) } • Sources: {len(links)}",
@@ -188,11 +174,11 @@ else:
                 for u in links:
                     st.markdown(f"- {u}")
             else:
-                st.write("No sources available.")
+                st.write("No sources yet.")
 
-            # Select individual articles to remove
+            # Select articles you want to remove
             if det.get("articles"):
-                id_to_title = {a["id"]: a["title"] for a in det["articles"]}
+                id_to_title = {a["id"]: a.get("title") or a.get("link") for a in det["articles"]}
                 article_choices = list(id_to_title.keys())
                 rm_ids = st.multiselect(
                     "Remove links from this incident",
@@ -205,10 +191,10 @@ else:
 
             col1, col2, col3 = st.columns([1, 1, 2])
             with col1:
-                if st.button("Mark as reviewed", key=f"s_{r['id']}"):
+                if st.button("Mark as seen", key=f"s_{r['id']}"):
                     try:
                         patch_gov_incident_seen(r["id"], True)
-                        st.success("Incident marked as reviewed.")
+                        st.success("Incident marked as seen.")
                         _refresh_all()
                         st.rerun()
                     except ApiError as e:
@@ -235,16 +221,17 @@ else:
 
 st.divider()
 
-# ====================== C) Manually add incident ======================
-
+# ---------------------------------------------------------------------
+# C) Manually add a new incident
+# ---------------------------------------------------------------------
 st.subheader("Manually add a new incident")
 
 with st.form("manual_add"):
-    headline = st.text_input("Title / headline", placeholder="e.g., Long-haul A350 issue")
+    headline = st.text_input("Title / headline", placeholder="e.g., Long-haul A350 technical issue")
     date_str = st.text_input("Date (dd-mm-yyyy) – no time", placeholder="e.g., 08-11-2025")
     links_text = st.text_area(
-        "Source links (one per line). The page will pre-fill title/source from the URL; you can refine later.",
-        placeholder="https://example.com/article-1\nhttps://another-source.com/story",
+        "Source links (one per line)",
+        placeholder="https://example.com/article-1\nhttps://another-site.com/story",
         height=140,
     )
     submitted = st.form_submit_button("Create")
@@ -255,9 +242,9 @@ if submitted:
     else:
         iso = _iso_from_ddmmyyyy(date_str)
         if not iso:
-            st.error("Please provide a valid date in **dd-mm-yyyy** format.")
+            st.error("Please enter a valid date in **dd-mm-yyyy** format.")
         else:
-            # Build article rows from links
+            # Prepare minimal article rows from given links
             rows: list[dict] = []
             for line in links_text.splitlines():
                 u = line.strip()
@@ -265,7 +252,7 @@ if submitted:
                     continue
                 rows.append(
                     {
-                        "title": u,             # minimal: display the URL as title (can be edited later)
+                        "title": u,             # minimal: title = link
                         "source": _hostname(u), # source = hostname
                         "link": u,
                         "published_at": None,   # optional
@@ -275,11 +262,7 @@ if submitted:
                 st.error("Please provide at least **one link**.")
             else:
                 try:
-                    created = post_gov_incident(
-                        headline=headline.strip(),
-                        occurred_at=iso,
-                        articles=rows,
-                    )
+                    created = post_gov_incident(headline=headline.strip(), occurred_at=iso, articles=rows)
                     _refresh_all()
                     st.success(f"Incident created (ID {created.get('id')}).")
                     st.rerun()
@@ -288,14 +271,15 @@ if submitted:
 
 st.divider()
 
-# ====================== D) ⚠️ Wipe database ======================
-
-st.subheader("⚠️ Wipe database")
+# ---------------------------------------------------------------------
+# D) Danger zone – wipe database
+# ---------------------------------------------------------------------
+st.subheader("⚠️ Danger zone – wipe database")
 st.caption("Deletes **all** government-aircraft data (incidents + articles). This cannot be undone.")
 
 left, right = st.columns([1, 3])
 with left:
-    really = st.checkbox("Yes, wipe everything", value=False)
+    really = st.checkbox("Yes, delete everything", value=False)
 with right:
     if st.button("Wipe database", type="secondary", disabled=not really):
         try:
