@@ -188,6 +188,7 @@ def delete_weather_logs():
 
 
 # ==================== GOVWATCH ====================
+# ==================== GOVWATCH ====================
 
 def get_gov_incidents(seen: bool | None = None, limit: int = 500, offset: int = 0):
     params = {"limit": limit, "offset": offset}
@@ -200,15 +201,17 @@ def get_gov_incident_detail(incident_id: int):
     r = requests.get(f"{API_BASE}/gov/incidents/{incident_id}", timeout=10)
     return _json_or_raise(r)
 
-def post_gov_incident(headline: str, occurred_at: str | None, articles: list[dict], manual: bool = False, api_key: str | None = None):
-    """
-    Legt Incident an. Wenn manual=True, prüft das Backend auf Tages-Duplikat und
-    liefert bei Kollision HTTP 409 mit Meldung "Es existiert bereits ein Vorfall an diesem Tag".
-    """
+def post_gov_incident(
+    headline: str,
+    occurred_at: str | None,
+    articles: list[dict],
+    api_key: str | None = None,
+    manual: bool = False,   # <<< neu
+):
     headers = {"Content-Type": "application/json"}
     headers["X-API-Key"] = api_key or os.getenv("INGEST_API_KEY", "dev-secret")
-    params = {"manual": "true"} if manual else None
     payload = {"headline": headline, "occurred_at": occurred_at, "articles": articles}
+    params = {"manual": "true"} if manual else None
     r = requests.post(f"{API_BASE}/gov/incidents", params=params, json=payload, headers=headers, timeout=15)
     return _json_or_raise(r)
 

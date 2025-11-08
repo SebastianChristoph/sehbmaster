@@ -1,4 +1,3 @@
-# streamlit/pages/Regierungsflieger-Tracking.py
 import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -9,16 +8,20 @@ import streamlit as st
 from api_client import (
     get_gov_incidents,
     get_gov_incident_detail,
-    post_gov_incident,   # nutzt jetzt params manual=true bei Bedarf
+    post_gov_incident,
+    post_gov_article,
     patch_gov_incident_seen,
     delete_gov_incident,
     delete_gov_incident_article,
-    wipe_gov,
     ApiError,
+    wipe_gov,
 )
 
 st.set_page_config(page_title="Regierungsflieger-Tracking", page_icon="✈️", layout="wide")
 st.title("✈️ Regierungsflieger-Tracking")
+st.caption("Liste der Pannen-Cluster (Incidents) aus der Datenbank. Oben: **Gesichtete** tabellarisch. "
+           "Unten: **Ungesichtete sichten** (prüfen, als gesichtet markieren, Links entfernen, löschen). "
+           "Ganz unten kannst du **manuell** ein Pannen-Cluster hinzufügen.")
 
 # -------------------- Helpers --------------------
 
@@ -33,14 +36,10 @@ def _fmt_date_iso_to_de(iso: str | None) -> str:
         return ""
 
 def _iso_from_ddmmyyyy(s: str) -> str | None:
-    """
-    expects dd-mm-yyyy and returns ISO 'YYYY-MM-DDT00:00:00Z'
-    """
+    """expects dd-mm-yyyy and returns ISO 'YYYY-MM-DDT00:00:00Z'."""
     if not isinstance(s, str):
         return None
     s = s.strip()
-    if not s:
-        return None
     m = re.match(r"^(\d{2})-(\d{2})-(\d{4})$", s)
     if not m:
         return None
@@ -58,16 +57,11 @@ def _hostname(u: str) -> str:
         return u
 
 def _links_from_detail(detail: dict) -> list[str]:
-    links: list[str] = []
-    for a in detail.get("articles", []):
-        u = a.get("link")
-        if isinstance(u, str) and u:
-            links.append(u)
-    return links
+    return [a.get("link") for a in detail.get("articles", []) if a.get("link")]
 
-# Cache
 @st.cache_data(ttl=10)
 def _load_incident_ids(seen: bool | None) -> list[dict]:
+    # Backend liefert bereits chronologisch (occurred_at ASC, NULLS LAST)
     return get_gov_incidents(seen=seen, limit=500, offset=0)
 
 @st.cache_data(ttl=10)
@@ -83,7 +77,6 @@ def _refresh_all():
 seen_rows = _load_incident_ids(seen=True)
 st.subheader(f"Gesichtete Vorfälle ({len(seen_rows)})")
 
-# Tabelle (Datum | Titel | Quellen als •-getrennte Liste)
 table_records: list[dict] = []
 for r in seen_rows:
     det = _load_incident_detail(r["id"])
@@ -91,6 +84,7 @@ for r in seen_rows:
     table_records.append({
         "Datum": _fmt_date_iso_to_de(r.get("occurred_at")),
         "Titel": r.get("headline", ""),
+        # besser einzeilig darstellen:
         "Quellen": " • ".join(links) if links else "",
     })
 
@@ -105,7 +99,6 @@ st.divider()
 # ====================== B) Ungesichtete sichten ======================
 
 st.subheader("Ungesichtete sichten")
-
 unseen_rows = _load_incident_ids(seen=False)
 st.caption(f"{len(unseen_rows)} ungesichtete Vorfälle")
 
@@ -115,21 +108,18 @@ else:
     for r in unseen_rows:
         det = _load_incident_detail(r["id"])
         links = _links_from_detail(det)
-        with st.expander(f"{r['headline']} • { _fmt_date_iso_to_de(r.get('occurred_at')) } • Quellen: {len(links)}", expanded=True):
-            # Links
+        with st.expander(f"{r['headline']} • {_fmt_date_iso_to_de(r.get('occurred_at'))} • Quellen: {len(links)}", expanded=True):
             if links:
                 for u in links:
                     st.markdown(f"- {u}")
             else:
                 st.write("Keine Quellen vorhanden.")
 
-            # Auswahl einzelner Artikel zum Entfernen
             if det.get("articles"):
                 id_to_title = {a["id"]: a["title"] for a in det["articles"]}
-                article_choices = list(id_to_title.keys())
                 rm_ids = st.multiselect(
                     "Links aus diesem Vorfall entfernen",
-                    options=article_choices,
+                    options=list(id_to_title.keys()),
                     format_func=lambda aid: f"{id_to_title.get(aid, aid)}",
                     key=f"rm_{r['id']}",
                 )
@@ -142,8 +132,7 @@ else:
                     try:
                         patch_gov_incident_seen(r["id"], True)
                         st.success("Vorfall als gesichtet markiert.")
-                        _refresh_all()
-                        st.rerun()
+                        _refresh_all(); st.rerun()
                     except ApiError as e:
                         st.error(f"Fehler: {e}")
             with col2:
@@ -151,8 +140,7 @@ else:
                     try:
                         delete_gov_incident(r["id"])
                         st.warning("Vorfall gelöscht.")
-                        _refresh_all()
-                        st.rerun()
+                        _refresh_all(); st.rerun()
                     except ApiError as e:
                         st.error(f"Fehler: {e}")
             with col3:
@@ -161,8 +149,7 @@ else:
                         for aid in rm_ids:
                             delete_gov_incident_article(r["id"], int(aid))
                         st.success(f"{len(rm_ids)} Link(s) entfernt.")
-                        _refresh_all()
-                        st.rerun()
+                        _refresh_all(); st.rerun()
                     except ApiError as e:
                         st.error(f"Fehler: {e}")
 
@@ -174,13 +161,13 @@ st.subheader("Manuell neues Pannen-Cluster hinzufügen")
 
 with st.form("manual_add"):
     headline = st.text_input("Titel / Headline", placeholder="z. B. Panne auf Langstrecke A350")
-    date_str = st.text_input("Datum (dd-mm-yyyy)", placeholder="z. B. 08-11-2025")
+    date_str = st.text_input("Datum (dd-mm-yyyy) – ohne Uhrzeit", placeholder="z. B. 08-11-2025")
     links_text = st.text_area(
         "Quellen-Links (je Zeile)",
         placeholder="https://beispiel.de/artikel-1\nhttps://andere-quelle.de/meldung",
         height=140,
     )
-    submitted = st.form_submit_button("Anlegen (mit Tagesprüfung)")
+    submitted = st.form_submit_button("Anlegen")
 
 if submitted:
     if not headline.strip():
@@ -196,8 +183,8 @@ if submitted:
                 if not u:
                     continue
                 rows.append({
-                    "title": u,                  # minimal: Titel = Link
-                    "source": _hostname(u),      # Quelle = Hostname
+                    "title": u,
+                    "source": _hostname(u),
                     "link": u,
                     "published_at": None,
                 })
@@ -205,8 +192,12 @@ if submitted:
                 st.error("Bitte mindestens **einen Link** angeben.")
             else:
                 try:
-                    # Wichtig: manual=True, damit Backend auf Tag-Duplikat prüft
-                    created = post_gov_incident(headline=headline.strip(), occurred_at=iso, articles=rows, manual=True)
+                    created = post_gov_incident(
+                        headline=headline.strip(),
+                        occurred_at=iso,
+                        articles=rows,
+                        manual=True,   # <<< sorgt für Tages-Duplikat-Check im Backend
+                    )
                     _refresh_all()
                     st.success(f"Vorfall angelegt (ID {created.get('id')}).")
                     st.rerun()

@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Column, Integer, Text, DateTime, Boolean, ForeignKey,
-    select, func, delete, asc, desc, text
+    select, func, delete, asc
 )
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, relationship
+from sqlalchemy.sql import text as sql_text
 
 from ..db import get_db_session, engine
 
@@ -46,10 +47,44 @@ class GovIncidentArticle(Base):
     incident_id = Column(Integer, ForeignKey("gov.incidents.id", ondelete="CASCADE"), nullable=False)
     title = Column(Text, nullable=False)
     source = Column(Text, nullable=False)
-    link = Column(Text, nullable=False)  # UNIQUE(incident_id, link) -> DB-Constraint via ensure_gov_schema()
+    link = Column(Text, nullable=False)  # UNIQUE(incident_id, link) wird unten idempotent sichergestellt
     published_at = Column(DateTime(timezone=True), nullable=True)
 
     incident = relationship("GovIncident", back_populates="articles")
+
+
+# ==========================
+# Schema/Constraint sicherstellen (idempotent)
+# ==========================
+
+def ensure_gov_schema() -> None:
+    """Legt Schema gov an, erzeugt Tabellen und den gewünschten UNIQUE-Constraint."""
+    with engine.begin() as conn:
+        conn.execute(sql_text('CREATE SCHEMA IF NOT EXISTS "gov";'))
+    # Tabellen anlegen (falls noch nicht vorhanden)
+    Base.metadata.create_all(bind=engine)
+
+    # sicherstellen: UNIQUE (incident_id, link)
+    ddl = """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_namespace n ON n.oid = c.connamespace
+        JOIN pg_class t ON t.oid = c.conrelid
+        WHERE n.nspname = 'gov'
+          AND t.relname = 'incident_articles'
+          AND c.conname = 'uq_gov_article_incident_link'
+      ) THEN
+        ALTER TABLE gov.incident_articles
+          ADD CONSTRAINT uq_gov_article_incident_link
+          UNIQUE (incident_id, link);
+      END IF;
+    END$$;
+    """
+    with engine.begin() as conn:
+        conn.execute(sql_text(ddl))
 
 
 # ==========================
@@ -102,80 +137,6 @@ def _require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
 
 
 # ==========================
-# Schema-Erzeugung (idempotent)
-# ==========================
-def ensure_gov_schema() -> None:
-    """
-    Legt Schema/Tables an (falls nicht vorhanden) und erzwingt:
-      - UNIQUE (incident_id, link) in gov.incident_articles
-      - nützliche Indizes
-    Idempotent, d.h. gefahrlos mehrfach aufzurufen.
-    """
-    with engine.begin() as conn:
-        # Schema
-        conn.execute(text("CREATE SCHEMA IF NOT EXISTS gov;"))
-
-        # Incidents
-        conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS gov.incidents (
-          id           SERIAL PRIMARY KEY,
-          headline     TEXT NOT NULL,
-          occurred_at  TIMESTAMPTZ NULL,
-          seen         BOOLEAN NOT NULL DEFAULT FALSE,
-          created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """))
-
-        # Articles
-        conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS gov.incident_articles (
-          id            SERIAL PRIMARY KEY,
-          incident_id   INTEGER NOT NULL REFERENCES gov.incidents(id) ON DELETE CASCADE,
-          title         TEXT NOT NULL,
-          source        TEXT NOT NULL,
-          link          TEXT NOT NULL,
-          published_at  TIMESTAMPTZ NULL
-        );
-        """))
-
-        # Altes globales UNIQUE(link) entfernen, falls vorhanden
-        conn.execute(text("""
-        DO $$
-        BEGIN
-          IF EXISTS (
-            SELECT 1 FROM pg_constraint c
-            JOIN pg_namespace n ON n.oid = c.connamespace
-            JOIN pg_class t ON t.oid = c.conrelid
-            WHERE n.nspname = 'gov' AND t.relname = 'incident_articles' AND c.conname = 'idx_gov_articles_link_unique'
-          ) THEN
-            ALTER TABLE gov.incident_articles DROP CONSTRAINT idx_gov_articles_link_unique;
-          END IF;
-        END$$;
-        """))
-
-        # gewünschte UNIQUE(incident_id, link)
-        conn.execute(text("""
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint c
-            JOIN pg_namespace n ON n.oid = c.connamespace
-            JOIN pg_class t ON t.oid = c.conrelid
-            WHERE n.nspname = 'gov' AND t.relname = 'incident_articles' AND c.conname = 'uq_gov_article_incident_link'
-          ) THEN
-            ALTER TABLE gov.incident_articles
-              ADD CONSTRAINT uq_gov_article_incident_link UNIQUE (incident_id, link);
-          END IF;
-        END$$;
-        """))
-
-        # Indizes für Sortierung/Lookups
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_gov_incidents_seen ON gov.incidents(seen);"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_gov_incidents_occurred ON gov.incidents(occurred_at);"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_gov_articles_incident ON gov.incident_articles(incident_id);"))
-
-
-# ==========================
 # Endpunkte
 # ==========================
 
@@ -202,24 +163,24 @@ def list_incidents(
     if seen is not None:
         q = q.where(GovIncident.seen == seen)
 
-    # Chronologisch (aufsteigend): occurred_at, dann created_at
-    q = q.order_by(asc(GovIncident.occurred_at).nulls_last(), asc(GovIncident.created_at))
-    q = q.offset(offset).limit(limit)
+    # Chronologisch: occurred_at ASC (NULLS LAST), danach created_at ASC
+    q = q.order_by(
+        GovIncident.occurred_at.asc().nulls_last(),
+        asc(GovIncident.created_at),
+    ).offset(offset).limit(limit)
 
     rows = session.execute(q).all()
-    out: List[GovIncidentListItem] = []
-    for r in rows:
-        out.append(
-            GovIncidentListItem(
-                id=r.id,
-                headline=r.headline,
-                occurred_at=r.occurred_at,
-                seen=r.seen,
-                created_at=r.created_at,
-                articles_count=r.articles_count or 0,
-            )
+    return [
+        GovIncidentListItem(
+            id=r.id,
+            headline=r.headline,
+            occurred_at=r.occurred_at,
+            seen=r.seen,
+            created_at=r.created_at,
+            articles_count=r.articles_count or 0,
         )
-    return out
+        for r in rows
+    ]
 
 
 @router.get("/incidents/{incident_id}", response_model=GovIncidentOut)
@@ -227,15 +188,20 @@ def get_incident_detail(incident_id: int, session: Session = Depends(get_db_sess
     inc = session.get(GovIncident, incident_id)
     if not inc:
         raise HTTPException(status_code=404, detail="incident not found")
+
     arts = (
         session.execute(
             select(GovIncidentArticle)
             .where(GovIncidentArticle.incident_id == incident_id)
-            .order_by(desc(GovIncidentArticle.published_at.nulls_last()), desc(GovIncidentArticle.id))
+            .order_by(
+                GovIncidentArticle.published_at.desc().nulls_last(),
+                GovIncidentArticle.id.desc(),
+            )
         )
         .scalars()
         .all()
     )
+
     return GovIncidentOut(
         id=inc.id,
         headline=inc.headline,
@@ -262,12 +228,14 @@ def create_incident(
     _=Depends(_require_api_key),
     session: Session = Depends(get_db_session),
 ):
-    # Manual-Check: existiert an diesem Kalendertag bereits ein Incident?
+    # Manual-Check: „Datum schon vorhanden?“
     if manual and payload.occurred_at is not None:
         day: date = payload.occurred_at.date()
         exists_id = (
             session.execute(
-                select(GovIncident.id).where(func.date(GovIncident.occurred_at) == day).limit(1)
+                select(GovIncident.id)
+                .where(func.date(GovIncident.occurred_at) == day)
+                .limit(1)
             )
             .scalars()
             .first()
@@ -275,7 +243,7 @@ def create_incident(
         if exists_id is not None:
             raise HTTPException(
                 status_code=409,
-                detail="Es existiert bereits ein Vorfall an diesem Tag",
+                detail="Es existiert bereits eine Panne an diesem Tag",
             )
 
     inc = GovIncident(
@@ -286,7 +254,6 @@ def create_incident(
     session.add(inc)
     session.flush()  # inc.id verfügbar
 
-    created_articles: List[GovIncidentArticle] = []
     for a in payload.articles:
         row = GovIncidentArticle(
             incident_id=inc.id,
@@ -298,18 +265,21 @@ def create_incident(
         session.add(row)
         try:
             session.flush()
-            created_articles.append(row)
         except IntegrityError:
+            # Doppelter Link innerhalb desselben Incidents -> ignorieren
             session.rollback()
-            # Duplikat innerhalb desselben Incidents -> ignorieren
-            pass
 
     session.commit()
 
-    # frische Artikel-Liste zurückgeben
+    # frisch lesen
     arts = (
         session.execute(
-            select(GovIncidentArticle).where(GovIncidentArticle.incident_id == inc.id).order_by(GovIncidentArticle.id.asc())
+            select(GovIncidentArticle)
+            .where(GovIncidentArticle.incident_id == inc.id)
+            .order_by(
+                GovIncidentArticle.published_at.desc().nulls_last(),
+                GovIncidentArticle.id.desc(),
+            )
         )
         .scalars()
         .all()
@@ -373,7 +343,6 @@ def add_article(
         session.refresh(row)
     except IntegrityError:
         session.rollback()
-        # Duplikat innerhalb desselben Incidents
         raise HTTPException(status_code=409, detail="article already exists in this incident")
 
     return GovArticleOut(
