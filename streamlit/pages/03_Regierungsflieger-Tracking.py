@@ -1,3 +1,4 @@
+# streamlit/pages/20_Regierungsflieger_Tracking.py
 import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -13,18 +14,12 @@ from api_client import (
     patch_gov_incident_seen,
     delete_gov_incident,
     delete_gov_incident_article,
-    ApiError,
     wipe_gov,
+    ApiError,
 )
 
 st.set_page_config(page_title="Regierungsflieger-Tracking", page_icon="✈️", layout="wide")
 st.title("✈️ Regierungsflieger-Tracking")
-
-st.caption(
-    "Liste der Pannen-Cluster (Incidents) aus der Datenbank. "
-    "Oben: **Gesichtete** tabellarisch. Unten: **Ungesichtete sichten** (prüfen, als gesichtet markieren, Links entfernen, löschen). "
-    "Ganz unten kannst du **manuell** ein Pannen-Cluster hinzufügen."
-)
 
 # -------------------- Helpers --------------------
 
@@ -32,7 +27,6 @@ def _fmt_date_iso_to_de(iso: str | None) -> str:
     if not iso:
         return ""
     try:
-        # accept "YYYY-MM-DDTHH:MM:SSZ" or with offset
         s = iso.replace("Z", "+00:00")
         dt = datetime.fromisoformat(s)
         return dt.strftime("%d.%m.%Y")
@@ -41,7 +35,7 @@ def _fmt_date_iso_to_de(iso: str | None) -> str:
 
 def _iso_from_ddmmyyyy(s: str) -> str | None:
     """
-    expects dd-mm-yyyy (with dashes) and returns ISO 'YYYY-MM-DDT00:00:00Z'
+    expects dd-mm-yyyy and returns ISO 'YYYY-MM-DDT00:00:00Z'
     """
     if not isinstance(s, str):
         return None
@@ -72,9 +66,9 @@ def _links_from_detail(detail: dict) -> list[str]:
             links.append(u)
     return links
 
-# Cache to avoid hammering API on each rerun
 @st.cache_data(ttl=10)
 def _load_incident_ids(seen: bool | None) -> list[dict]:
+    # Backend liefert bereits chronologisch (occurred_at ASC, NULLS LAST)
     return get_gov_incidents(seen=seen, limit=500, offset=0)
 
 @st.cache_data(ttl=10)
@@ -88,11 +82,8 @@ def _refresh_all():
 # ====================== A) Gesichtete: Tabelle ======================
 
 seen_rows = _load_incident_ids(seen=True)
-st.subheader("Gesichtete Vorfälle ({len(seen_rows)})")
+st.subheader(f"Gesichtete Vorfälle ({len(seen_rows)})")
 
-
-
-# Build table: we need links, so fetch detail for each id
 table_records: list[dict] = []
 for r in seen_rows:
     det = _load_incident_detail(r["id"])
@@ -100,13 +91,12 @@ for r in seen_rows:
     table_records.append({
         "Datum": _fmt_date_iso_to_de(r.get("occurred_at")),
         "Titel": r.get("headline", ""),
-        # DataFrame shows single-line text better; join with • to avoid newline issues in cells
         "Quellen": " • ".join(links) if links else "",
     })
 
 if table_records:
     df_seen = pd.DataFrame(table_records, columns=["Datum", "Titel", "Quellen"])
-    st.dataframe(df_seen, use_container_width=True, hide_index=True)
+    st.dataframe(df_seen, hide_index=True, width="stretch")
 else:
     st.info("Keine **gesichteten** Vorfälle vorhanden.")
 
@@ -126,14 +116,13 @@ else:
         det = _load_incident_detail(r["id"])
         links = _links_from_detail(det)
         with st.expander(f"{r['headline']} • { _fmt_date_iso_to_de(r.get('occurred_at')) } • Quellen: {len(links)}", expanded=True):
-            # Links als Liste
             if links:
                 for u in links:
                     st.markdown(f"- {u}")
             else:
                 st.write("Keine Quellen vorhanden.")
 
-            # Auswahl einzelner Artikel zum Entfernen
+            # einzelne Artikel entfernen
             if det.get("articles"):
                 id_to_title = {a["id"]: a["title"] for a in det["articles"]}
                 article_choices = list(id_to_title.keys())
@@ -184,7 +173,7 @@ st.subheader("Manuell neues Pannen-Cluster hinzufügen")
 
 with st.form("manual_add"):
     headline = st.text_input("Titel / Headline", placeholder="z. B. Panne auf Langstrecke A350")
-    date_str = st.text_input("Datum (dd-mm-yyyy) – ohne Uhrzeit", placeholder="z. B. 08-11-2025")
+    date_str = st.text_input("Datum (dd-mm-yyyy)", placeholder="z. B. 08-11-2025")
     links_text = st.text_area(
         "Quellen-Links (je Zeile)",
         placeholder="https://beispiel.de/artikel-1\nhttps://andere-quelle.de/meldung",
@@ -200,34 +189,37 @@ if submitted:
         if not iso:
             st.error("Bitte ein gültiges Datum im Format **dd-mm-yyyy** angeben.")
         else:
-            # Artikel aus den Linkzeilen bauen
             rows: list[dict] = []
             for line in links_text.splitlines():
                 u = line.strip()
                 if not u:
                     continue
                 rows.append({
-                    "title": u,                  # minimal: Titel = Link (später gern upgraden)
-                    "source": _hostname(u),      # Quelle = Hostname
+                    "title": u,             # minimal: Titel = Link
+                    "source": _hostname(u), # Quelle = Hostname
                     "link": u,
-                    "published_at": None,        # optional
+                    "published_at": None,
                 })
             if not rows:
                 st.error("Bitte mindestens **einen Link** angeben.")
             else:
                 try:
-                    # nutzt deinen API-Client (mit occurred_at)
-                    created = post_gov_incident(headline=headline.strip(), occurred_at=iso, articles=rows)
-                    # Bei Erfolg: Cache leeren und UI refreshen
+                    # WICHTIG: manual=True → Tages-Duplikat-Check im Backend
+                    created = post_gov_incident(
+                        headline=headline.strip(),
+                        occurred_at=iso,
+                        articles=rows,
+                        manual=True,
+                    )
                     _refresh_all()
                     st.success(f"Vorfall angelegt (ID {created.get('id')}).")
                     st.rerun()
                 except ApiError as e:
-                    # Falls Backend den Tages-Duplikat-Check hat, kommt hier die passende Meldung an
                     st.error(f"Anlegen fehlgeschlagen: {e}")
+
 st.divider()
 
-# ---------- 4) ⚠️ Datenbank leeren ----------
+# ---------- D) ⚠️ Datenbank leeren ----------
 st.subheader("⚠️ Datenbank leeren")
 st.caption("Löscht **alle** Regierungsflieger-Daten (Incidents + Artikel). Nicht rückgängig zu machen!")
 
