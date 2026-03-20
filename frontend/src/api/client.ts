@@ -65,10 +65,14 @@ export const api = {
     get<LogEntry[]>("/lobby/logs", { limit }),
 
   // Vergabe
-  getVergabeNotices: (limit = 25, offset = 0) =>
-    get<VergabeNotice[]>("/vergabe/notices", { limit, offset }),
+  getVergabeNotices: (limit = 25, offset = 0, procedureType?: string) =>
+    get<VergabeNotice[]>("/vergabe/notices", procedureType
+      ? { limit, offset, procedure_type: procedureType }
+      : { limit, offset }),
   getVergabeStats: () =>
     get<VergabeStats>("/vergabe/notices/stats"),
+  getVergabeProcedureTypes: () =>
+    get<{ code: string; count: number }[]>("/vergabe/notices/procedure_types"),
   getVergabeAlerts: (limit = 50) =>
     get<VergabeAlert[]>("/vergabe/alerts", { limit }),
   getVergabeLogs: (limit = 100) =>

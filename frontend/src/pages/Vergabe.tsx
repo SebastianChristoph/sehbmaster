@@ -25,39 +25,78 @@ const ALERT_LABELS: Record<string, { label: string; color: string }> = {
   NEAR_THRESHOLD: { label: "Knapp unter Schwellenwert", color: "bg-amber-100 text-amber-700" },
 };
 
+// eForms procedure type codes → German label + description
+const PROCEDURE_META: Record<string, { label: string; desc: string; color: string }> = {
+  open:         { label: "Offen",             desc: "Offenes Verfahren – jeder Bieter kann ein Angebot abgeben",                         color: "bg-emerald-100 text-emerald-700" },
+  restricted:   { label: "Nicht offen",        desc: "Nichtoffenes Verfahren – nur ausgewählte Bieter werden aufgefordert",               color: "bg-sky-100 text-sky-700" },
+  "neg-w-call": { label: "Verhandlung (mit)",  desc: "Verhandlungsverfahren mit vorherigem Aufruf zum Wettbewerb",                       color: "bg-violet-100 text-violet-700" },
+  "neg-wo-call":{ label: "Verhandlung (ohne)", desc: "Verhandlungsverfahren ohne vorherigen Aufruf – z.B. bei Dringlichkeit oder Alleinstellung", color: "bg-amber-100 text-amber-700" },
+  "comp-tend":  { label: "Wettb. Dialog",      desc: "Wettbewerblicher Dialog – für besonders komplexe Aufträge",                        color: "bg-indigo-100 text-indigo-700" },
+  "oth-single": { label: "Direktvergabe",      desc: "Direktvergabe an einen einzigen Anbieter",                                        color: "bg-rose-100 text-rose-700" },
+  "oth-mult":   { label: "Direktvergabe (m.)", desc: "Direktvergabe nach Marktabfrage bei mehreren Anbietern",                           color: "bg-orange-100 text-orange-700" },
+  innovation:   { label: "Innovation",         desc: "Innovationspartnerschaft – für Entwicklung neuer Lösungen",                        color: "bg-teal-100 text-teal-700" },
+  __null__:     { label: "Unbekannt",          desc: "Verfahrensart nicht aus XML extrahierbar",                                        color: "bg-slate-100 text-slate-500" },
+};
+
+function ProcedureBadge({ code }: { code: string | null }) {
+  const key = code ?? "__null__";
+  const meta = PROCEDURE_META[key] ?? { label: key, desc: key, color: "bg-slate-100 text-slate-500" };
+  return (
+    <span
+      title={meta.desc}
+      className={`inline-block text-[10px] font-medium px-1.5 py-0.5 rounded cursor-default ${meta.color}`}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
 export function Vergabe() {
   const [notices, setNotices]   = useState<VergabeNotice[]>([]);
   const [stats, setStats]       = useState<{ total_notices: number; total_value_eur: number; top_contractors: { name: string; count: number }[]; top_authorities: { name: string; count: number }[] } | null>(null);
   const [alerts, setAlerts]     = useState<VergabeAlert[]>([]);
   const [logs, setLogs]         = useState<LogEntry[]>([]);
   const [scraperStatus, setScraperStatus] = useState<{ raspberry: string; status: string; message: string | null } | null>(null);
+  const [procedureCounts, setProcedureCounts] = useState<{ code: string; count: number }[]>([]);
   const [loading, setLoading]   = useState(true);
   const [page, setPage]         = useState(0);
+  const [filterProc, setFilterProc] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
     Promise.all([
-      api.getVergabeNotices(PAGE_SIZE, page * PAGE_SIZE),
+      api.getVergabeNotices(PAGE_SIZE, page * PAGE_SIZE, filterProc ?? undefined),
       api.getVergabeStats(),
       api.getVergabeAlerts(50),
       api.getVergabeLogs(50),
       api.getStatus(),
-    ]).then(([n, s, alrt, lg, statuses]) => {
+      api.getVergabeProcedureTypes(),
+    ]).then(([n, s, alrt, lg, statuses, pc]) => {
       setNotices(n);
       setStats(s);
       setAlerts(alrt);
       setLogs(lg);
       setScraperStatus(statuses.find(st => st.raspberry === SCRAPER_ID) ?? null);
+      setProcedureCounts(pc);
     }).finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, [page]);
+  useEffect(() => { load(); }, [page, filterProc]);
+
+  const handleFilterProc = (code: string | null) => {
+    setFilterProc(code);
+    setPage(0);
+  };
 
   const runLogs = logs.filter(l =>
     l.message.includes("finished vergabewatch") || l.message.includes("SCRAPER ERROR")
   ).slice(0, 10);
 
-  const totalPages = stats ? Math.ceil(stats.total_notices / PAGE_SIZE) : 1;
+  // When filter is active, total for pagination is the count for that filter bucket
+  const filteredTotal = filterProc
+    ? (procedureCounts.find(p => p.code === filterProc)?.count ?? 0)
+    : (stats?.total_notices ?? 0);
+  const totalPages = Math.ceil(filteredTotal / PAGE_SIZE) || 1;
 
   if (loading) return <div className="p-8 text-slate-400 text-sm">Lade...</div>;
 
@@ -164,9 +203,44 @@ export function Vergabe() {
 
       {/* Notices Tabelle */}
       <section className="mb-8">
-        <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-3">
-          Vergabebekanntmachungen ({(stats?.total_notices ?? 0).toLocaleString()})
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
+            Vergabebekanntmachungen ({(stats?.total_notices ?? 0).toLocaleString()})
+          </h2>
+        </div>
+
+        {/* Verfahren-Filter */}
+        <div className="flex flex-wrap gap-2 mb-3">
+          <button
+            onClick={() => handleFilterProc(null)}
+            className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+              filterProc === null
+                ? "bg-slate-800 text-white border-slate-800"
+                : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
+            }`}
+          >
+            Alle
+          </button>
+          {procedureCounts.map(({ code, count }) => {
+            const meta = PROCEDURE_META[code] ?? { label: code, desc: code, color: "bg-slate-100 text-slate-500" };
+            const active = filterProc === code;
+            return (
+              <button
+                key={code}
+                onClick={() => handleFilterProc(code)}
+                title={meta.desc}
+                className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                  active
+                    ? "bg-slate-800 text-white border-slate-800"
+                    : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
+                }`}
+              >
+                {meta.label} <span className="opacity-60">({count})</span>
+              </button>
+            );
+          })}
+        </div>
+
         <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -190,11 +264,19 @@ export function Vergabe() {
                     </td>
                     <td className="px-4 py-2.5 text-slate-600 text-xs max-w-[200px] truncate">{n.contractor_name ?? "—"}</td>
                     <td className="px-4 py-2.5 text-xs">
-                      <span title={n.cpv_description ?? ""} className="font-mono text-slate-400">{n.cpv_code ?? "—"}</span>
-                      {n.cpv_description && <span className="ml-1 text-slate-400 text-[10px]">{n.cpv_description}</span>}
+                      {n.cpv_code ? (
+                        <span title={n.cpv_description ?? n.cpv_code} className="font-mono text-slate-400 cursor-default">
+                          {n.cpv_code}
+                          {n.cpv_description && (
+                            <span className="font-sans ml-1.5 text-slate-400 text-[10px] not-italic">{n.cpv_description}</span>
+                          )}
+                        </span>
+                      ) : "—"}
                     </td>
                     <td className="px-4 py-2.5 text-slate-700 text-xs whitespace-nowrap font-medium">{fmtEur(n.contract_value_eur)}</td>
-                    <td className="px-4 py-2.5 text-slate-400 text-xs">{n.procedure_type ?? "—"}</td>
+                    <td className="px-4 py-2.5">
+                      <ProcedureBadge code={n.procedure_type} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -215,6 +297,22 @@ export function Vergabe() {
               </div>
             </div>
           )}
+        </div>
+      </section>
+
+      {/* Procedure-Legende */}
+      <section className="mb-8">
+        <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-3">Verfahrensarten – Legende</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {Object.entries(PROCEDURE_META).filter(([k]) => k !== "__null__").map(([code, meta]) => (
+            <div key={code} className="bg-white border border-slate-200 rounded-lg px-4 py-3 flex items-start gap-3">
+              <span className={`mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0 ${meta.color}`}>{meta.label}</span>
+              <div>
+                <p className="text-[10px] font-mono text-slate-400 mb-0.5">{code}</p>
+                <p className="text-xs text-slate-500">{meta.desc}</p>
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 

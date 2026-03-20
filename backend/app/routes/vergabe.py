@@ -56,11 +56,15 @@ class LogOut(BaseModel):
 
 # ---- Notices ----
 @router.get("/notices", response_model=list[NoticeOut])
-def list_notices(limit: int = 100, offset: int = 0):
+def list_notices(limit: int = 100, offset: int = 0, procedure_type: Optional[str] = None):
     with get_session() as s:
-        rows = s.execute(
-            select(VergabeNotice).order_by(VergabeNotice.published_date.desc().nullslast()).offset(offset).limit(limit)
-        ).scalars().all()
+        q = select(VergabeNotice).order_by(VergabeNotice.published_date.desc().nullslast())
+        if procedure_type is not None:
+            if procedure_type == '__null__':
+                q = q.where(VergabeNotice.procedure_type.is_(None))
+            else:
+                q = q.where(VergabeNotice.procedure_type == procedure_type)
+        rows = s.execute(q.offset(offset).limit(limit)).scalars().all()
         return [NoticeOut.model_validate(r, from_attributes=True) for r in rows]
 
 @router.get("/notices/stats")
@@ -88,6 +92,16 @@ def notices_stats():
             "top_contractors": [{"name": r[0], "count": r[1]} for r in top_contractors],
             "top_authorities": [{"name": r[0], "count": r[1]} for r in top_authorities],
         }
+
+@router.get("/notices/procedure_types")
+def procedure_types():
+    with get_session() as s:
+        rows = s.execute(
+            select(VergabeNotice.procedure_type, func.count().label("cnt"))
+            .group_by(VergabeNotice.procedure_type)
+            .order_by(func.count().desc())
+        ).all()
+        return [{"code": r[0] if r[0] is not None else "__null__", "count": r[1]} for r in rows]
 
 @router.post("/notices", status_code=201)
 def upsert_notice(payload: NoticeIn, _=Depends(require_api_key)):
