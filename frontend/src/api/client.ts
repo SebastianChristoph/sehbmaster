@@ -63,20 +63,6 @@ export const api = {
     get<LobbyAlert[]>("/lobby/alerts", { limit }),
   getLobbyLogs: (limit = 100) =>
     get<LogEntry[]>("/lobby/logs", { limit }),
-
-  // Vergabe
-  getVergabeNotices: (limit = 25, offset = 0, procedureType?: string) =>
-    get<VergabeNotice[]>("/vergabe/notices", procedureType
-      ? { limit, offset, procedure_type: procedureType }
-      : { limit, offset }),
-  getVergabeStats: () =>
-    get<VergabeStats>("/vergabe/notices/stats"),
-  getVergabeProcedureTypes: () =>
-    get<{ code: string; count: number }[]>("/vergabe/notices/procedure_types"),
-  getVergabeAlerts: (limit = 50) =>
-    get<VergabeAlert[]>("/vergabe/alerts", { limit }),
-  getVergabeLogs: (limit = 100) =>
-    get<LogEntry[]>("/vergabe/logs", { limit }),
 };
 
 // ---------- Types ----------
@@ -163,37 +149,4 @@ export interface LobbyAlert {
   description: string | null;
   evidence: Record<string, unknown> | null;
   created_at: string;
-}
-
-export interface VergabeNotice {
-  id: number;
-  publication_number: string;
-  notice_type: string | null;
-  published_date: string | null;
-  contracting_authority: string | null;
-  contracting_country: string | null;
-  contractor_name: string | null;
-  contract_value_eur: number | null;
-  cpv_code: string | null;
-  cpv_description: string | null;
-  procedure_type: string | null;
-  description: string | null;
-  ted_url: string | null;
-  created_at: string;
-}
-
-export interface VergabeAlert {
-  id: number;
-  alert_type: string;
-  contractor: string | null;
-  authority: string | null;
-  evidence: Record<string, unknown> | null;
-  created_at: string;
-}
-
-export interface VergabeStats {
-  total_notices: number;
-  total_value_eur: number;
-  top_contractors: { name: string; count: number }[];
-  top_authorities: { name: string; count: number }[];
 }

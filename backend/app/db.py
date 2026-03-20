@@ -59,5 +59,4 @@ def ensure_schemas() -> None:
         conn.execute(text('CREATE SCHEMA IF NOT EXISTS "dummy";'))
         conn.execute(text('CREATE SCHEMA IF NOT EXISTS "bild";'))
         conn.execute(text('CREATE SCHEMA IF NOT EXISTS "lobby";'))
-        conn.execute(text('CREATE SCHEMA IF NOT EXISTS "vergabe";'))
         conn.commit()

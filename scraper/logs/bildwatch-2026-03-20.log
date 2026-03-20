@@ -20,3 +20,101 @@
 [LOG] 2026-03-20T12:00:03+00:00 finished bild scraping at 13:00, 20.03.2026 after 0.03min | neu=1 (premium=0) | conversions=0 | snapshot=86 (20 premium)
 [OK] finished bild scraping at 13:00, 20.03.2026 after 0.03min | neu=1 (premium=0) | conversions=0 | snapshot=86 (20 premium)
 --- 2026-03-20T12:00:03+00:00 END (exit=0) ---
+--- 2026-03-20T13:00:01+00:00 START ---
+[LOG] 2026-03-20T13:00:01+00:00 Start scraping BILD at 14:00, 20.03.2026
+[LOG] 2026-03-20T13:00:02+00:00 DB-Artikel geladen: 25406
+[LOG] 2026-03-20T13:00:03+00:00 Bild-Artikel gefunden: 87 (roh: 87)
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69bd41628f57616717159a73 – 'Angriffe auf Parks und Freizeitziele: Iran droht Touristen weltweit'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69bcf806ea8bf301e4ae1bb7 – 'Christian Ulmen hatte als Jugendlicher Telefonsex – gegen Geld'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69b97e5417184da7cffdcfc6 – 'Bundesliga: Millionen-Explosion bei Bayern-Flirt\xa0- Neue Bundesliga-Marktwerte da'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69bd3a72e5e9d619745d15f6 – '„Immer wieder sonntags“: Aus für die Show von Stefan Mross!'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69b02a8f64d1f5a2cd518ede – 'AirPods von Apple: Versteckte Funktionen, die entspannen und sanft einschlafen lassen'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69bc005dd225a75f4a234f77 – 'Das finnische „Onni“: Botschafter Kai Sauer über das Glück der Finnen'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69bc6b458f5761671715906b – 'Flucht aus Standesamt in Lauf: Bräutigam nimmt Kind mit'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69b83558fc05063917a4d973 – 'Kelheim: Syrer nach Randale im Elektro-Laden weggesperrt'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69bd0d178f5761671715954f – 'Nvidia DLSS 5: Entwickler warnen vor KI-Slop in Videospielen'
+[LOG] 2026-03-20T13:00:03+00:00 CREATE 69bbe6f3d3cf984a3adb78bd – 'Wegen Brandgefahr ruft Xiaomi eine Powerbank zurück'
+[LOG] 2026-03-20T13:00:03+00:00 finished bild scraping at 14:00, 20.03.2026 after 0.03min | neu=10 (premium=1) | conversions=0 | snapshot=87 (21 premium)
+[OK] finished bild scraping at 14:00, 20.03.2026 after 0.03min | neu=10 (premium=1) | conversions=0 | snapshot=87 (21 premium)
+--- 2026-03-20T13:00:03+00:00 END (exit=0) ---
+--- 2026-03-20T14:00:01+00:00 START ---
+[LOG] 2026-03-20T14:00:01+00:00 Start scraping BILD at 15:00, 20.03.2026
+[LOG] 2026-03-20T14:00:02+00:00 DB-Artikel geladen: 25416
+[LOG] 2026-03-20T14:00:03+00:00 Bild-Artikel gefunden: 87 (roh: 87)
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bd304fcb1f9a070e4039d2 – 'Borussia Dortmund: Was wird jetzt aus Niklas Süle?'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bc643dbff1fdf740901efe – 'Bushido verhindert Autobahn-Crash in letzter Sekunde'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bbf5d5f55c5d84e2e1e83e – 'Aktien: Diese 7 Werte werden jetzt zu Überfliegern'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bd29c28f576167171597ef – 'Biathlon: Ex-Profi stirbt mit nur 27 Jahren – 2022 startete er bei Olympia'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bd0d59cb1f9a070e403625 – 'Bruce Willis wird 71: Familie gratuliert, er hält seine Enkelin im Arm'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bd074a8f576167171594f0 – 'EU-Gipfel gesprengt: Das droht Orbán, wenn er wirklich die Seiten wechselt'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bd2c88e5e9d619745d1438 – 'Rückkehr zum FC Bayern! Wird ER der neue Goretzka?'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69b9254f17184da7cffdc6b7 – 'Bieterkrieg um Luxus-Resort in Deutschland: Hotel für 180 Mio. Euro'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bd11638f57616717159594 – 'Deutsche Bahn testet ersten Schienenersatzverkehr mit Fahrrädern'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69bd02ce8f576167171594a1 – 'Ulmen-Fernandes: „Warum ist sie nicht gegangen?“ ist die falsche Frage.'
+[LOG] 2026-03-20T14:00:03+00:00 CREATE 69b8229cd64ac9417f490082 – 'Stockdunkel auf der Autobahn: Sprachsteuerung in China-Auto schaltet nachts die Scheinwerfer ab'
+[LOG] 2026-03-20T14:00:03+00:00 finished bild scraping at 15:00, 20.03.2026 after 0.03min | neu=11 (premium=3) | conversions=0 | snapshot=87 (21 premium)
+[OK] finished bild scraping at 15:00, 20.03.2026 after 0.03min | neu=11 (premium=3) | conversions=0 | snapshot=87 (21 premium)
+--- 2026-03-20T14:00:03+00:00 END (exit=0) ---
+--- 2026-03-20T15:00:01+00:00 START ---
+[LOG] 2026-03-20T15:00:01+00:00 Start scraping BILD at 16:00, 20.03.2026
+[LOG] 2026-03-20T15:00:02+00:00 DB-Artikel geladen: 25427
+[LOG] 2026-03-20T15:00:03+00:00 Bild-Artikel gefunden: 86 (roh: 86)
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69bd525bcb1f9a070e403d4d – 'Chuck Norris (†86) ist tot: Familie bestätigt Tod des Action-Stars'
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69bd02c98f5761671715949b – 'Collien Fernandes suchte Täter im TV – da lag der Feind wohl noch in ihrem Bett …'
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69bd4ef68f57616717159bcf – 'Fix! Borussia Dortmund verlängert mit diesem Leistungsträger'
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69b9387456ad962f523d32a8 – 'Griechenlands Armeechef zum Iran-Krieg: Wie sicher ist mein Mittelmeer-Urlaub?'
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69bc853eea8bf301e4ae18b9 – 'Torwart-Entscheidung gefallen: Er ist jetzt die Nr. 1 in Leverkusen'
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69bd3feecb1f9a070e403b4f – 'Opel steigt in Fia-Rennserie ein – Vierjahresvertrag bei Formel E'
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69bd405acb1f9a070e403b61 – 'Pixel 10 reagiert nach Update nicht mehr auf Anrufe und Nachrichten'
+[LOG] 2026-03-20T15:00:03+00:00 CREATE 69bd44cfcb1f9a070e403bdf – 'Aktion mit der AOK: Lidl belohnt Bewegung mit Rabatten im Markt'
+[LOG] 2026-03-20T15:00:03+00:00 finished bild scraping at 16:00, 20.03.2026 after 0.03min | neu=8 (premium=4) | conversions=0 | snapshot=86 (24 premium)
+[OK] finished bild scraping at 16:00, 20.03.2026 after 0.03min | neu=8 (premium=4) | conversions=0 | snapshot=86 (24 premium)
+--- 2026-03-20T15:00:03+00:00 END (exit=0) ---
+--- 2026-03-20T16:00:01+00:00 START ---
+[LOG] 2026-03-20T16:00:01+00:00 Start scraping BILD at 17:00, 20.03.2026
+[LOG] 2026-03-20T16:00:03+00:00 DB-Artikel geladen: 25435
+[LOG] 2026-03-20T16:00:03+00:00 Bild-Artikel gefunden: 87 (roh: 87)
+[LOG] 2026-03-20T16:00:03+00:00 CREATE 69bd60f6e5e9d619745d196b – 'Nahost-Konflikt: Trump beschimpft Nato-Partner als Feiglinge'
+[LOG] 2026-03-20T16:00:03+00:00 CREATE 69bd6170e5e9d619745d1977 – 'Offizielles Statement da!: Der erste Audi-Schock in der Formel 1'
+[LOG] 2026-03-20T16:00:03+00:00 CREATE 69bd103dea8bf301e4ae1d78 – 'Snooker: Legende Ronnie O’Sullivan stellt Fabel-Rekord auf'
+[LOG] 2026-03-20T16:00:03+00:00 CREATE 69bd56c0ea8bf301e4ae2634 – 'Die besten Witze über den Action-Star (†86): Chuck Norris schläft nicht. Er wartet.'
+[LOG] 2026-03-20T16:00:03+00:00 CREATE 69bd6066ea8bf301e4ae2753 – 'Ansage vom Bayern-Boss: „Lassen uns nicht den Mund verbieten“'
+[LOG] 2026-03-20T16:00:04+00:00 CREATE 69bd0ca6cb1f9a070e40361a – 'Stuttgart: Lebenslang für den Killer von Mutter'
+[LOG] 2026-03-20T16:00:04+00:00 CREATE 69bbd034d3cf984a3adb7552 – 'Zoff um geblitzten Feuerwehrmann: Bürgermeister greift durch'
+[LOG] 2026-03-20T16:00:04+00:00 CREATE 69bc2e458f57616717158e2f – 'Prozess: Teilnehmer von Biggest Loser soll drei Jungen missbraucht haben'
+[LOG] 2026-03-20T16:00:04+00:00 finished bild scraping at 17:00, 20.03.2026 after 0.04min | neu=8 (premium=0) | conversions=0 | snapshot=87 (23 premium)
+[OK] finished bild scraping at 17:00, 20.03.2026 after 0.04min | neu=8 (premium=0) | conversions=0 | snapshot=87 (23 premium)
+--- 2026-03-20T16:00:04+00:00 END (exit=0) ---
+--- 2026-03-20T17:00:01+00:00 START ---
+[LOG] 2026-03-20T17:00:01+00:00 Start scraping BILD at 18:00, 20.03.2026
+[LOG] 2026-03-20T17:00:02+00:00 DB-Artikel geladen: 25443
+[LOG] 2026-03-20T17:00:02+00:00 Bild-Artikel gefunden: 86 (roh: 86)
+[LOG] 2026-03-20T17:00:02+00:00 CREATE 69bd507acb1f9a070e403cf7 – 'Digitale Gewalt: So will Ministerin Hubig gegen Deepfakes vorgehen '
+[LOG] 2026-03-20T17:00:02+00:00 CREATE 69bd234a8f5761671715976a – 'Mette-Marit: Ein TV-Auftritt ohne Antworten!'
+[LOG] 2026-03-20T17:00:02+00:00 CREATE 69bce995e5e9d619745d0dc4 – 'Mikaela Shiffrin: Plötzlich tauchen brisante Karriere-Spekulationen auf! '
+[LOG] 2026-03-20T17:00:02+00:00 CREATE 69bcf168e5e9d619745d0e19 – 'Nationalmannschaft: Hamann vermisst zwei Spieler im Nagelsmann-Kader'
+[LOG] 2026-03-20T17:00:02+00:00 CREATE 69ba9e7b964a7ba2a520d96d – 'Berlin: Hier soll ein Wolkenkratzer mit 1000 Wohnungen entstehen'
+[LOG] 2026-03-20T17:00:02+00:00 CREATE 69bc28635edc508d7381e9de – 'Stromanschlag im Januar: Wegner gerät noch mehr unter Druck '
+[LOG] 2026-03-20T17:00:02+00:00 CREATE 69bc652bbff1fdf740901f0b – 'Star trug es zum ersten Mal: Bully Herbig lüftet Amulett-Geheimnis'
+[LOG] 2026-03-20T17:00:02+00:00 finished bild scraping at 18:00, 20.03.2026 after 0.02min | neu=7 (premium=1) | conversions=0 | snapshot=86 (23 premium)
+[OK] finished bild scraping at 18:00, 20.03.2026 after 0.02min | neu=7 (premium=1) | conversions=0 | snapshot=86 (23 premium)
+--- 2026-03-20T17:00:02+00:00 END (exit=0) ---
+--- 2026-03-20T18:00:01+00:00 START ---
+[LOG] 2026-03-20T18:00:02+00:00 Start scraping BILD at 19:00, 20.03.2026
+[LOG] 2026-03-20T18:00:03+00:00 DB-Artikel geladen: 25450
+[LOG] 2026-03-20T18:00:03+00:00 Bild-Artikel gefunden: 85 (roh: 85)
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd04bee5e9d619745d0f1d – 'Collien Fernandes lässt sich in ZDF-Doku Ulmen-Tattoo entfernen'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bb89fcc72449c0750d9274 – "Schwester Kim: So wurde sie zum heimlichen „Let's Dance“-Star"
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd1a2e8f57616717159675 – 'Schock-Prognose aus Saudi-Arabien: Kostet Sprit bald drei Euro?'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd6de1ea8bf301e4ae28bb – 'Regierung setzt auf Schutz für Deutsche und Gäste nach Mullah-Drohung'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd09abe5e9d619745d0f68 – 'Prinzessin Anne im Outfit von 1969: Die Recycling-Queen'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd0bd1e5e9d619745d0f97 – 'HSV: Entscheidung über Glatzel-Strafe nach Interview-Provokation gefallen'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd80098f5761671715a01e – 'Kommentar: Sagt uns, wo wir noch sicher sind!'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd65dd8f57616717159e2e – 'Medienbericht: Ex-BVB-Coach Edin Terzic Favorit bei Kult-Klub '
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bced4c8f57616717159373 – 'Lindsey Vonn: Olympia-Star kommentiert Jutta Leerdams Ski-Party'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd61d2ea8bf301e4ae2788 – 'Unfall im Harz: Frau in Waschstraße von ihrem Auto mitgeschleift'
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69bd6c0dea8bf301e4ae2891 – 'Wiesbaden: Tötungsdelikt: 77-Jährige tot in ihrer Wohnung gefunden '
+[LOG] 2026-03-20T18:00:03+00:00 CREATE 69b8020917184da7cffdb8e1 – 'Schufa enthüllt neuen Score: Transparent, fair – Tanja Birkholz im BILD-Talk'
+[LOG] 2026-03-20T18:00:03+00:00 finished bild scraping at 19:00, 20.03.2026 after 0.03min | neu=12 (premium=2) | conversions=0 | snapshot=85 (22 premium)
+[OK] finished bild scraping at 19:00, 20.03.2026 after 0.03min | neu=12 (premium=2) | conversions=0 | snapshot=85 (22 premium)
+--- 2026-03-20T18:00:03+00:00 END (exit=0) ---
