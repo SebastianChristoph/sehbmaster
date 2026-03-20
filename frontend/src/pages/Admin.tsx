@@ -4,7 +4,9 @@ import { Shield, LogOut, Lock, User, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 
 const projects = [
-  { name: "Bildwatch", schema: "bild" },
+  { name: "Bildwatch",   schema: "bild" },
+  { name: "Lobbywatch",  schema: "lobby" },
+  { name: "Vergabewatch",schema: "vergabe" },
 ];
 
 export function Admin() {

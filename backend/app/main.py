@@ -8,6 +8,8 @@ from .routes import status as status_routes
 from .routes import bild as bild_routes
 from .routes import auth as auth_routes
 from .routes import info as info_routes
+from .routes import lobby as lobby_routes
+from .routes import vergabe as vergabe_routes
 
 
 app = FastAPI(title="sehbmaster backend", version="0.1.0")
@@ -31,3 +33,5 @@ app.include_router(status_routes.router)
 app.include_router(bild_routes.router)
 app.include_router(auth_routes.router)
 app.include_router(info_routes.router)
+app.include_router(lobby_routes.router)
+app.include_router(vergabe_routes.router)

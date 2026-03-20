@@ -51,6 +51,28 @@ export const api = {
     get<BildCorrection[]>("/bild/corrections"),
   getBildLogs: (limit = 200) =>
     get<LogEntry[]>("/bild/logs", { limit }),
+
+  // Lobby
+  getLobbyEntries: (limit = 25, offset = 0) =>
+    get<LobbyEntry[]>("/lobby/entries", { limit, offset }),
+  getLobbyEntriesCount: () =>
+    get<{ count: number }>("/lobby/entries/count"),
+  getLobbyChanges: (limit = 50) =>
+    get<LobbyChange[]>("/lobby/changes", { limit }),
+  getLobbyAlerts: (limit = 50) =>
+    get<LobbyAlert[]>("/lobby/alerts", { limit }),
+  getLobbyLogs: (limit = 100) =>
+    get<LogEntry[]>("/lobby/logs", { limit }),
+
+  // Vergabe
+  getVergabeNotices: (limit = 25, offset = 0) =>
+    get<VergabeNotice[]>("/vergabe/notices", { limit, offset }),
+  getVergabeStats: () =>
+    get<VergabeStats>("/vergabe/notices/stats"),
+  getVergabeAlerts: (limit = 50) =>
+    get<VergabeAlert[]>("/vergabe/alerts", { limit }),
+  getVergabeLogs: (limit = 100) =>
+    get<LogEntry[]>("/vergabe/logs", { limit }),
 };
 
 // ---------- Types ----------
@@ -97,4 +119,77 @@ export interface LogEntry {
   id: number;
   timestamp: string;
   message: string;
+}
+
+export interface LobbyEntry {
+  register_number: string;
+  name: string | null;
+  legal_form: string | null;
+  first_publication_date: string | null;
+  last_update_date: string | null;
+  active: boolean;
+  current_entry_id: number | null;
+  financial_expenses_from: number | null;
+  financial_expenses_to: number | null;
+  refuse_financial_info: boolean;
+  codex_violation: boolean;
+  fields_of_interest: string[] | null;
+  client_orgs: { name: string; country: string | null }[] | null;
+  client_persons: { firstName: string; lastName: string }[] | null;
+  legislative_projects: { name: string; printingNumber: string | null }[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LobbyChange {
+  id: number;
+  register_number: string;
+  detected_at: string;
+  old_entry_id: number | null;
+  new_entry_id: number | null;
+  change_type: string;
+  diff: Record<string, { old: unknown; new: unknown }> | null;
+  notes: string | null;
+}
+
+export interface LobbyAlert {
+  id: number;
+  register_number: string;
+  alert_type: string;
+  description: string | null;
+  evidence: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface VergabeNotice {
+  id: number;
+  publication_number: string;
+  notice_type: string | null;
+  published_date: string | null;
+  contracting_authority: string | null;
+  contracting_country: string | null;
+  contractor_name: string | null;
+  contract_value_eur: number | null;
+  cpv_code: string | null;
+  cpv_description: string | null;
+  procedure_type: string | null;
+  description: string | null;
+  ted_url: string | null;
+  created_at: string;
+}
+
+export interface VergabeAlert {
+  id: number;
+  alert_type: string;
+  contractor: string | null;
+  authority: string | null;
+  evidence: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface VergabeStats {
+  total_notices: number;
+  total_value_eur: number;
+  top_contractors: { name: string; count: number }[];
+  top_authorities: { name: string; count: number }[];
 }

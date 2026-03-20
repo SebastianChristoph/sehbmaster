@@ -3,6 +3,8 @@ import { AuthProvider } from "./context/AuthContext";
 import { Layout } from "./components/Layout";
 import { Home } from "./pages/Home";
 import { Bild } from "./pages/Bild";
+import { Lobby } from "./pages/Lobby";
+import { Vergabe } from "./pages/Vergabe";
 import { Admin } from "./pages/Admin";
 
 export default function App() {
@@ -13,6 +15,8 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Home />} />
             <Route path="/bild" element={<Bild />} />
+            <Route path="/lobby" element={<Lobby />} />
+            <Route path="/vergabe" element={<Vergabe />} />
             <Route path="/admin" element={<Admin />} />
           </Route>
         </Routes>
