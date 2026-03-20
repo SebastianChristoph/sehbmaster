@@ -169,7 +169,8 @@ def parse_ted_xml(pub_number: str) -> Optional[Dict]:
             v = first(tag)
             if v:
                 try:
-                    return float(v.replace(",", "."))
+                    f = float(v.replace(",", "."))
+                    return f if f >= 0 else None  # -1 is a TED placeholder for "not disclosed"
                 except ValueError:
                     pass
             return None
@@ -272,6 +273,12 @@ def sync_vergabewatch():
             parsed = parse_ted_xml(pub)
             if not parsed:
                 err_count += 1
+                continue
+
+            # Skip non-award notices (CN, PIN etc.) — only keep CAN (contract award)
+            ntype = parsed.get("notice_type") or ""
+            if not ntype.startswith("can"):
+                skip_count += 1
                 continue
 
             # Skip records with no meaningful data (empty XML / unsupported format)
