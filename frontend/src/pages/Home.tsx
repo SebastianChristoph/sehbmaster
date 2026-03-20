@@ -3,12 +3,11 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { KPICard } from "../components/KPICard";
 import { StatusBadge } from "../components/StatusBadge";
-import { Newspaper, Cloud, Plane, RefreshCw } from "lucide-react";
+import { Newspaper, Cloud, RefreshCw } from "lucide-react";
 
 const projects = [
   { name: "Bildwatch",    path: "/bild",    icon: Newspaper, desc: "Bild.de Artikel-Monitoring"    },
   { name: "Weatherwatch", path: "/weather", icon: Cloud,     desc: "Wettervorhersage-Tracking"     },
-  { name: "Gov Tracker",  path: "/gov",     icon: Plane,     desc: "Regierungsflieger & Incidents" },
 ];
 
 export function Home() {

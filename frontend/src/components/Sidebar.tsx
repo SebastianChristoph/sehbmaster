@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Newspaper, Cloud, Plane, Shield, ChevronLeft, ChevronRight } from "lucide-react";
+import { LayoutDashboard, Newspaper, Cloud, Shield, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
@@ -7,7 +7,6 @@ const navItems = [
   { to: "/",        icon: LayoutDashboard, label: "Dashboard"   },
   { to: "/bild",    icon: Newspaper,       label: "Bildwatch"   },
   { to: "/weather", icon: Cloud,           label: "Weatherwatch" },
-  { to: "/gov",     icon: Plane,           label: "Gov Tracker"  },
 ];
 
 export function Sidebar() {
@@ -17,7 +16,6 @@ export function Sidebar() {
 
   return (
     <aside className={`${w} shrink-0 bg-white border-r border-slate-200 flex flex-col transition-all duration-200 h-screen sticky top-0`}>
-      {/* Logo */}
       <div className={`flex items-center h-14 px-4 border-b border-slate-200 ${collapsed ? "justify-center" : "justify-between"}`}>
         {!collapsed && (
           <span className="text-base font-bold text-indigo-600 tracking-tight">sehbmaster</span>
@@ -30,7 +28,6 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 py-3 flex flex-col gap-0.5 px-2">
         {navItems.map(({ to, icon: Icon, label }) => (
           <NavLink
@@ -72,7 +69,6 @@ export function Sidebar() {
         </NavLink>
       </nav>
 
-      {/* Footer */}
       {!collapsed && (
         <div className="px-4 py-3 border-t border-slate-100">
           <p className="text-[10px] text-slate-400">sehbmaster v0.1</p>

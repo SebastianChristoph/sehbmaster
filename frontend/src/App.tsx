@@ -4,7 +4,6 @@ import { Layout } from "./components/Layout";
 import { Home } from "./pages/Home";
 import { Bild } from "./pages/Bild";
 import { Weather } from "./pages/Weather";
-import { Gov } from "./pages/Gov";
 import { Admin } from "./pages/Admin";
 
 export default function App() {
@@ -16,7 +15,6 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/bild" element={<Bild />} />
             <Route path="/weather" element={<Weather />} />
-            <Route path="/gov" element={<Gov />} />
             <Route path="/admin" element={<Admin />} />
           </Route>
         </Routes>

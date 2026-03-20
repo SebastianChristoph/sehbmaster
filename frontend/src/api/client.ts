@@ -61,15 +61,6 @@ export const api = {
     }),
   getWeatherLogs: (limit = 200) =>
     get<LogEntry[]>("/weather/logs", { limit }),
-
-  // Gov
-  getGovIncidents: (seen?: boolean, limit = 200) =>
-    get<GovIncident[]>("/gov/incidents", {
-      limit,
-      ...(seen !== undefined ? { seen } : {}),
-    }),
-  getGovIncidentDetail: (id: number) =>
-    get<{ incident: GovIncident; articles: GovArticle[] }>(`/gov/incidents/${id}`),
 };
 
 // ---------- Types ----------
@@ -127,24 +118,6 @@ export interface WeatherDataPoint {
   rain_mm: number | null;
   created_at: string;
   rain_probability_pct: number | null;
-}
-
-export interface GovIncident {
-  id: number;
-  headline: string;
-  occurred_at: string | null;
-  seen: boolean;
-  created_at: string;
-  articles_count: number;
-}
-
-export interface GovArticle {
-  id: number;
-  incident_id: number;
-  title: string;
-  source: string;
-  link: string;
-  published_at: string | null;
 }
 
 export interface LogEntry {

@@ -7,7 +7,6 @@ from .models import Base
 from .routes import status as status_routes
 from .routes import bild as bild_routes
 from .routes import weather as weather_routes
-from .routes import gov as gov_routes
 from .routes import auth as auth_routes
 
 
@@ -26,11 +25,9 @@ app.add_middleware(
 def on_startup():
     ensure_schemas()
     Base.metadata.create_all(bind=engine)
-    gov_routes.ensure_gov_schema()
 
 
 app.include_router(status_routes.router)
 app.include_router(bild_routes.router)
 app.include_router(weather_routes.router)
-app.include_router(gov_routes.router)
 app.include_router(auth_routes.router)
