@@ -16,7 +16,7 @@ export function Home() {
   const load = () => {
     setLoading(true);
     api.getStatus()
-      .then(setStatuses)
+      .then(all => setStatuses(all.filter(s => s.raspberry.startsWith("server-"))))
       .finally(() => setLoading(false));
   };
 

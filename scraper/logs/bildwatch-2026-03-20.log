@@ -12,3 +12,11 @@
 [LOG] 2026-03-20T11:53:02+00:00 finished bild scraping at 12:53, 20.03.2026 after 0.03min | neu=7 (premium=0) | conversions=0 | snapshot=86 (20 premium)
 [OK] finished bild scraping at 12:53, 20.03.2026 after 0.03min | neu=7 (premium=0) | conversions=0 | snapshot=86 (20 premium)
 --- 2026-03-20T11:53:02+00:00 END (exit=0) ---
+--- 2026-03-20T12:00:01+00:00 START ---
+[LOG] 2026-03-20T12:00:01+00:00 Start scraping BILD at 13:00, 20.03.2026
+[LOG] 2026-03-20T12:00:02+00:00 DB-Artikel geladen: 25405
+[LOG] 2026-03-20T12:00:03+00:00 Bild-Artikel gefunden: 86 (roh: 86)
+[LOG] 2026-03-20T12:00:03+00:00 CREATE 69bad86ed225a75f4a233f84 – 'Traditions-Brauerei nach 167 Jahren insolvent: Produziert Bier für Rewe'
+[LOG] 2026-03-20T12:00:03+00:00 finished bild scraping at 13:00, 20.03.2026 after 0.03min | neu=1 (premium=0) | conversions=0 | snapshot=86 (20 premium)
+[OK] finished bild scraping at 13:00, 20.03.2026 after 0.03min | neu=1 (premium=0) | conversions=0 | snapshot=86 (20 premium)
+--- 2026-03-20T12:00:03+00:00 END (exit=0) ---

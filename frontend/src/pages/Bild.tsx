@@ -6,9 +6,10 @@ import {
 import { api, BildCorrection, BildMetric, LogEntry } from "../api/client";
 import { KPICard } from "../components/KPICard";
 import { StatusBadge } from "../components/StatusBadge";
-import { FileText, Lock, TrendingUp, RefreshCw, Terminal } from "lucide-react";
+import { FileText, Lock, TrendingUp, RefreshCw, Terminal, ChevronLeft, ChevronRight } from "lucide-react";
 
 const SCRAPER_ID = "server-bildwatch";
+const CORR_PAGE_SIZE = 25;
 
 function fmt(dt: string | null) {
   if (!dt) return "—";
@@ -33,6 +34,7 @@ export function Bild() {
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
   const [dailyConversions, setDailyConversions] = useState<{ day: string; count: number }[]>([]);
   const [corrections, setCorrections] = useState<BildCorrection[]>([]);
+  const [corrPage, setCorrPage] = useState(0);
   const [hourly, setHourly] = useState<{
     snapshot_avg: { hour: number; Premium: number; Nicht_Premium: number }[];
     new_avg: { hour: number; Premium: number; Nicht_Premium: number }[];
@@ -56,6 +58,7 @@ export function Bild() {
       setCategoryCounts(cats);
       setDailyConversions(daily.slice(-60));
       setCorrections(corr);
+      setCorrPage(0);
       setHourly(h);
       setLogs(l);
       setScraperStatus(statuses.find(s => s.raspberry === SCRAPER_ID) ?? null);
@@ -81,8 +84,10 @@ export function Bild() {
     Premium: m.snapshot_premium,
   }));
 
-  // Letzte Läufe: "finished..." oder "SCRAPER ERROR" Logs
   const runLogs = logs.filter(l => l.message.includes("finished bild scraping") || l.message.includes("SCRAPER ERROR")).slice(0, 15);
+
+  const totalCorrPages = Math.ceil(corrCount / CORR_PAGE_SIZE);
+  const corrSlice = corrections.slice(corrPage * CORR_PAGE_SIZE, (corrPage + 1) * CORR_PAGE_SIZE);
 
   if (loading) return <div className="p-8 text-slate-400 text-sm">Lade...</div>;
 
@@ -227,7 +232,7 @@ export function Bild() {
       {/* Corrections */}
       <section>
         <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-3">
-          Corrections ({corrections.length})
+          Corrections ({corrCount})
         </h2>
         <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
@@ -240,7 +245,7 @@ export function Bild() {
                 </tr>
               </thead>
               <tbody>
-                {corrections.slice(0, 100).map((c, i) => (
+                {corrSlice.map((c, i) => (
                   <tr key={c.id} className={i % 2 === 0 ? "" : "bg-slate-50/50"}>
                     <td className="px-4 py-2.5 text-slate-700 max-w-xs truncate">
                       {c.article_url ? (
@@ -254,6 +259,29 @@ export function Bild() {
               </tbody>
             </table>
           </div>
+          {totalCorrPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 bg-slate-50">
+              <span className="text-xs text-slate-500">
+                Seite {corrPage + 1} von {totalCorrPages} ({corrCount} gesamt)
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setCorrPage(p => Math.max(0, p - 1))}
+                  disabled={corrPage === 0}
+                  className="p-1.5 rounded text-slate-500 hover:bg-slate-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <button
+                  onClick={() => setCorrPage(p => Math.min(totalCorrPages - 1, p + 1))}
+                  disabled={corrPage >= totalCorrPages - 1}
+                  className="p-1.5 rounded text-slate-500 hover:bg-slate-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>
