@@ -33,6 +33,9 @@ export const api = {
   // Status
   getStatus: () => get<{ raspberry: string; status: string; message: string | null }[]>("/status"),
 
+  // Info
+  getInfo: () => get<{ schemas: string[] }>("/info"),
+
   // Bild
   getBildArticles: (limit = 500, offset = 0) =>
     get<BildArticle[]>("/bild/articles", { limit, offset }),

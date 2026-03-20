@@ -1,6 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
-import { Shield, LogOut, Lock, User } from "lucide-react";
+import { Shield, LogOut, Lock, User, RefreshCw } from "lucide-react";
+import { api } from "../api/client";
+
+const projects = [
+  { name: "Bildwatch", schema: "bild" },
+];
 
 export function Admin() {
   const { isAdmin, login, logout } = useAuth();
@@ -8,6 +13,13 @@ export function Admin() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [schemas, setSchemas] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    if (isAdmin) {
+      api.getInfo().then(d => setSchemas(d.schemas)).catch(() => setSchemas([]));
+    }
+  }, [isAdmin]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,13 +119,17 @@ export function Admin() {
               <dt className="text-slate-500">Datenbank</dt>
               <dd className="text-slate-800 font-medium">PostgreSQL 16</dd>
             </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Schemas</dt>
-              <dd className="text-slate-800 font-medium">bild, weather, gov, status</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Streamlit (alt)</dt>
-              <dd className="text-slate-800 font-medium">Port 80 (parallel)</dd>
+            <div className="flex justify-between items-start">
+              <dt className="text-slate-500">DB-Schemas</dt>
+              <dd className="text-slate-800 font-medium text-right">
+                {schemas === null ? (
+                  <RefreshCw size={12} className="animate-spin inline" />
+                ) : schemas.length === 0 ? (
+                  <span className="text-slate-400">—</span>
+                ) : (
+                  <span className="font-mono text-xs">{schemas.join(", ")}</span>
+                )}
+              </dd>
             </div>
           </dl>
         </div>
@@ -121,12 +137,7 @@ export function Admin() {
         <div className="bg-white border border-slate-200 rounded-lg p-6">
           <h2 className="text-sm font-semibold text-slate-700 mb-4">Projekte</h2>
           <div className="space-y-2 text-sm">
-            {[
-              { name: "Bildwatch",    schema: "bild",    port: null },
-              { name: "Weatherwatch", schema: "weather", port: null },
-              { name: "Gov Tracker",  schema: "gov",     port: null },
-              { name: "Scraper Status", schema: "status", port: null },
-            ].map(p => (
+            {projects.map(p => (
               <div key={p.name} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
                 <span className="text-slate-700 font-medium">{p.name}</span>
                 <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded font-mono">{p.schema}</span>
