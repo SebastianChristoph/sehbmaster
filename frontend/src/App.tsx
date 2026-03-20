@@ -3,7 +3,6 @@ import { AuthProvider } from "./context/AuthContext";
 import { Layout } from "./components/Layout";
 import { Home } from "./pages/Home";
 import { Bild } from "./pages/Bild";
-import { Weather } from "./pages/Weather";
 import { Admin } from "./pages/Admin";
 
 export default function App() {
@@ -14,7 +13,6 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<Home />} />
             <Route path="/bild" element={<Bild />} />
-            <Route path="/weather" element={<Weather />} />
             <Route path="/admin" element={<Admin />} />
           </Route>
         </Routes>

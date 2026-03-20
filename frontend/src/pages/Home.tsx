@@ -3,11 +3,10 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { KPICard } from "../components/KPICard";
 import { StatusBadge } from "../components/StatusBadge";
-import { Newspaper, Cloud, RefreshCw } from "lucide-react";
+import { Newspaper, RefreshCw } from "lucide-react";
 
 const projects = [
-  { name: "Bildwatch",    path: "/bild",    icon: Newspaper, desc: "Bild.de Artikel-Monitoring"    },
-  { name: "Weatherwatch", path: "/weather", icon: Cloud,     desc: "Wettervorhersage-Tracking"     },
+  { name: "Bildwatch", path: "/bild", icon: Newspaper, desc: "Bild.de Artikel-Monitoring" },
 ];
 
 export function Home() {
@@ -41,7 +40,7 @@ export function Home() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
         <KPICard label="Projekte" value={projects.length} icon={<Newspaper size={16} />} />
-        <KPICard label="Scraper" value={statuses.length} icon={<Cloud size={16} />} accent="emerald" />
+        <KPICard label="Scraper" value={statuses.length} icon={<RefreshCw size={16} />} accent="emerald" />
         <KPICard label="Aktiv" value={working} icon={<RefreshCw size={16} />} accent="emerald" />
         <KPICard label="Fehler" value={errors} icon={<RefreshCw size={16} />} accent={errors > 0 ? "rose" : "indigo"} />
       </div>

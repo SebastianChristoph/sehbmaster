@@ -48,19 +48,6 @@ export const api = {
     get<BildCorrection[]>("/bild/corrections"),
   getBildLogs: (limit = 200) =>
     get<LogEntry[]>("/bild/logs", { limit }),
-
-  // Weather
-  getWeatherData: (city: string, leadDays?: number, dateFrom?: string, dateTo?: string) =>
-    get<WeatherDataPoint[]>("/weather/data", {
-      city,
-      model: "default",
-      ...(leadDays !== undefined ? { lead_days: leadDays } : {}),
-      ...(dateFrom ? { date_from: dateFrom } : {}),
-      ...(dateTo ? { date_to: dateTo } : {}),
-      limit: 5000,
-    }),
-  getWeatherLogs: (limit = 200) =>
-    get<LogEntry[]>("/weather/logs", { limit }),
 };
 
 // ---------- Types ----------
@@ -101,23 +88,6 @@ export interface BildCorrection {
   article_url: string | null;
   message: string | null;
   created_at: string;
-}
-
-export interface WeatherDataPoint {
-  id: number;
-  target_date: string;
-  lead_days: number;
-  model: string;
-  city: string;
-  run_time: string;
-  weather: string | null;
-  temp_avg_c: number | null;
-  temp_min_c: number | null;
-  temp_max_c: number | null;
-  wind_mps: number | null;
-  rain_mm: number | null;
-  created_at: string;
-  rain_probability_pct: number | null;
 }
 
 export interface LogEntry {

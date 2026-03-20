@@ -1,12 +1,11 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Newspaper, Cloud, Shield, ChevronLeft, ChevronRight } from "lucide-react";
+import { LayoutDashboard, Newspaper, Shield, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
 const navItems = [
-  { to: "/",        icon: LayoutDashboard, label: "Dashboard"   },
-  { to: "/bild",    icon: Newspaper,       label: "Bildwatch"   },
-  { to: "/weather", icon: Cloud,           label: "Weatherwatch" },
+  { to: "/",     icon: LayoutDashboard, label: "Dashboard" },
+  { to: "/bild", icon: Newspaper,       label: "Bildwatch" },
 ];
 
 export function Sidebar() {
