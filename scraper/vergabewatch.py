@@ -129,15 +129,26 @@ def fetch_ted_notices(days_back: int = 1) -> List[str]:
 def parse_ted_xml(pub_number: str) -> Optional[Dict]:
     """Fetches and parses TED XML for a notice. Returns structured dict or None."""
     url = TED_XML.format(pub=pub_number)
-    try:
-        resp = requests.get(url, timeout=TIMEOUT,
-                            headers={"Accept": "application/xml, text/xml, */*"})
-        if resp.status_code == 404:
+    xml_text = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, timeout=TIMEOUT,
+                                headers={"Accept": "application/xml, text/xml, */*"})
+            if resp.status_code == 404:
+                return None
+            if resp.status_code == 429:
+                wait = 15 * (attempt + 1)
+                print(f"[WARN] 429 on {pub_number}, waiting {wait}s (attempt {attempt+1})")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            xml_text = resp.text
+            break
+        except Exception as e:
+            print(f"[WARN] XML fetch {pub_number}: {e}")
             return None
-        resp.raise_for_status()
-        xml_text = resp.text
-    except Exception as e:
-        print(f"[WARN] XML fetch {pub_number}: {e}")
+    if xml_text is None:
+        print(f"[WARN] XML fetch {pub_number}: 3 retries exhausted")
         return None
 
     try:
@@ -261,6 +272,11 @@ def sync_vergabewatch():
             parsed = parse_ted_xml(pub)
             if not parsed:
                 err_count += 1
+                continue
+
+            # Skip records with no meaningful data (empty XML / unsupported format)
+            if parsed.get("contracting_authority") is None and parsed.get("contractor_name") is None:
+                skip_count += 1
                 continue
 
             try:
