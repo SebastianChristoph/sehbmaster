@@ -1,0 +1,14 @@
+--- 2026-03-20T11:53:00+00:00 START ---
+[LOG] 2026-03-20T11:53:00+00:00 Start scraping BILD at 12:53, 20.03.2026
+[LOG] 2026-03-20T11:53:02+00:00 DB-Artikel geladen: 25398
+[LOG] 2026-03-20T11:53:02+00:00 Bild-Artikel gefunden: 86 (roh: 86)
+[LOG] 2026-03-20T11:53:02+00:00 CREATE 69bcdf40ea8bf301e4ae1a6e – 'Collien Fernandes und Ulmen: Bundesregierung plant Gesetz gegen gefälschte Pornos'
+[LOG] 2026-03-20T11:53:02+00:00 CREATE 69ba7e394bac5c2831a985a9 – 'Infrastruktur-Schulden zweckentfremdet: Was droht mir eigentlich, wenn ich das als Normalo täte?'
+[LOG] 2026-03-20T11:53:02+00:00 CREATE 69bd0189cb1f9a070e403583 – 'Uli Hoeneß kritisiert Transfer-Strategie von Eintracht Frankfurt'
+[LOG] 2026-03-20T11:53:02+00:00 CREATE 69bbc534d225a75f4a2348ae – 'Cybercrime-Jäger aus Bayern schaltet halbes Darknet ab'
+[LOG] 2026-03-20T11:53:02+00:00 CREATE 69bcf446e5e9d619745d0e54 – 'Jugendlicher vor Supermarkt getötet: Er hat ein Alibi! Tatverdächtiger wieder auf freiem Fuß'
+[LOG] 2026-03-20T11:53:02+00:00 CREATE 69bd1c0dcb1f9a070e4037d7 – 'Vermisster Junge: Alvin (12) ist seit Anfang März verschwunden'
+[LOG] 2026-03-20T11:53:02+00:00 CREATE 69bc097aa716fe1231b22636 – 'Amazon Prime Day schon im Juni? Insider berichten von Planänderung'
+[LOG] 2026-03-20T11:53:02+00:00 finished bild scraping at 12:53, 20.03.2026 after 0.03min | neu=7 (premium=0) | conversions=0 | snapshot=86 (20 premium)
+[OK] finished bild scraping at 12:53, 20.03.2026 after 0.03min | neu=7 (premium=0) | conversions=0 | snapshot=86 (20 premium)
+--- 2026-03-20T11:53:02+00:00 END (exit=0) ---
