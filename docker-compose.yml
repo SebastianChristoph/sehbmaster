@@ -17,10 +17,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-    # ❌ entferne diese Zeile:
-    # ports:
-    #   - "5432:5432"
-    # ✅ optional: nur intern sichtbar machen
     expose:
       - "5432"
     networks:
@@ -35,6 +31,9 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - INGEST_API_KEY=${INGEST_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     depends_on:
       db:
         condition: service_healthy
@@ -57,6 +56,18 @@ services:
       - backend
     ports:
       - "80:8501"
+    networks:
+      - default
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: sehbmaster-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
     networks:
       - default
 

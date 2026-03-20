@@ -8,27 +8,29 @@ from .routes import status as status_routes
 from .routes import bild as bild_routes
 from .routes import weather as weather_routes
 from .routes import gov as gov_routes
+from .routes import auth as auth_routes
 
 
 app = FastAPI(title="sehbmaster backend", version="0.1.0")
 
-# --- CORS: ALLES ERLAUBEN ---
-# Hinweis: Das ist nur für offene Dev/Tests sinnvoll.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # <= jeder Origin darf
-    allow_credentials=False, # "*" + Credentials ist nicht erlaubt
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.on_event("startup")
 def on_startup():
     ensure_schemas()
     Base.metadata.create_all(bind=engine)
-    gov_routes.ensure_gov_schema()     
+    gov_routes.ensure_gov_schema()
+
 
 app.include_router(status_routes.router)
 app.include_router(bild_routes.router)
 app.include_router(weather_routes.router)
 app.include_router(gov_routes.router)
+app.include_router(auth_routes.router)
